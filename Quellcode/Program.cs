@@ -40,7 +40,6 @@ static class Program {
   if(file!=null&&monitorArg!=null)return CommandLine(file,monitorArg,connect,backup);
   Ui.Init();
   if(file=="--preview")return Preview();
-  if(file=="--screenshots")return Screenshots();
   try {Application.Run(new MainForm(file));}
   catch(Exception e){MessageBox.Show(e.Message,AppInfo.Product,MessageBoxButtons.OK,MessageBoxIcon.Error);return 1;}
   return 0;
@@ -49,35 +48,15 @@ static class Program {
  // --preview: Vorschaubilder der Oberfläche (hell und dunkel) nach "Design\Vorschau"
  static int Preview() {
   string dir=Path.Combine(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Design"),"Vorschau");
-  return Capture(dir,null,"Vorschau-hell.png","Vorschau-dunkel.png");
+  return Capture(dir,"Vorschau-hell.png","Vorschau-dunkel.png");
  }
 
- // --screenshots: Bilder für GitHub nach "Screenshots" – nur mit einer Demo-Verbindung,
- // damit keine echten Server, Benutzer oder Pfade zu sehen sind
- static int Screenshots() {
-  string demo=Path.Combine(Path.GetTempPath(),"RDPilot-Demo-"+Guid.NewGuid().ToString("N"));
-  try {
-   Directory.CreateDirectory(demo);
-   // Demo-Auswahl wie im typischen Einsatz: linker und rechter Monitor, rechter als Hauptmonitor
-   // (bei drei Monitoren zeigt das Bild damit auch Primär-Kennzeichnung und Warnhinweis)
-   var mons=Monitors.Load();
-   string selection="use multimon:i:0\r\n";
-   if(mons.Count>=2)selection="use multimon:i:1\r\nselectedmonitors:s:"+mons[mons.Count-1].Id+","+mons[0].Id+"\r\n";
-   File.WriteAllText(Path.Combine(demo,"Demo.rdp"),
-    "screen mode id:i:2\r\n"+selection+"full address:s:rdp.example.com\r\nusername:s:demo\r\n",
-    new System.Text.UnicodeEncoding(false,true));
-   string dir=Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Screenshots");
-   return Capture(dir,demo,"hell.png","dunkel.png");
-  } catch {return 1;}
-  finally {try {Directory.Delete(demo,true);} catch {}}
- }
-
- static int Capture(string dir,string folderOverride,string lightName,string darkName) {
+ static int Capture(string dir,string lightName,string darkName) {
   try {
    Directory.CreateDirectory(dir);
    foreach(bool dark in new[]{false,true}) {
     Ui.ApplyPalette(dark);
-    using(var form=new MainForm(null,folderOverride)) {
+    using(var form=new MainForm(null)) {
      form.StartPosition=FormStartPosition.Manual;
      form.Location=new System.Drawing.Point(-30000,-30000);
      form.ShowInTaskbar=false;
