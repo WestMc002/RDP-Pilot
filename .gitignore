@@ -1,0 +1,18 @@
+# Lokale Sicherungen, Entwuerfe und Build-Ergebnisse
+Backup/
+Design/
+Erstellen.log
+Quellcode/VersionInfo.cs
+*.exe
+*.neu.exe
+
+# Niemals hochladen: Verbindungsdateien (Server, Benutzer) und deren Sicherungen
+*.rdp
+*.rdp.bak
+
+# Anleitungen als Word-Datei (enthalten Screenshots mit echten Daten)
+*.docx
+
+# Windows
+Thumbs.db
+desktop.ini

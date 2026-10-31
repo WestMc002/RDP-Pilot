@@ -1,0 +1,59 @@
+﻿reitzner RDP Pilot
+=================
+Legt in .rdp-Dateien fest, auf welchem Monitor bzw. welchen Monitoren
+eine Remotedesktop-Sitzung startet.
+
+Erstellen
+Erstellen.bat per Doppelklick ausführen. Benötigt .NET Framework 4.x (csc.exe).
+Versionsnummer: Haupt.Neben.Jahr.MonatTag (z.B. 1.4.2026.1029).
+Die Hauptversion steht in Erstellen.bat (MAJOR), die Nebenversion wird bei
+jedem Erstellen automatisch um eins erhöht (höchste vorhandene Version + 1).
+Bei Fehlern bleibt die alte EXE unverändert; Details stehen in Erstellen.log.
+Nach dem Erstellen werden Vorschaubilder im Ordner Design\Vorschau erzeugt.
+
+Backup
+Nach jedem erfolgreichen Erstellen wird das gesamte Projekt (EXE, Quellcode,
+Resources, Design, Anleitungen usw.) in einen eigenen Versionsordner kopiert:
+Backup\reitzner RDP Pilot v<Version>
+Ordnernamen im Projekt werden groß geschrieben (Backup, Design, Quellcode, Resources).
+Erstellen.bat folgt der Standard-Vorlage (Globale Richtlinien).
+
+Bedienung
+Die EXE liest alle .rdp-Dateien aus ihrem eigenen Ordner ein.
+Verbindung oben auswählen, Monitore in der Karte anklicken (mehrere möglich),
+dann "Speichern & verbinden" oder "Speichern".
+Weitere Dateien über "Andere Datei …" oder per Drag & Drop aufs Fenster.
+Option "Sicherung erstellen" (standardmäßig aus): beim Speichern wird das
+Original als <Datei>.rdp.bak gesichert, sofern noch keine Sicherung existiert.
+"Original wiederherstellen" spielt sie zurück.
+
+Design: Windows-11-Standard (Fluent) – Farben, Ecken und Schrift wie Windows 11,
+helles/dunkles Design und Akzentfarbe werden aus Windows übernommen.
+
+Ein Monitor:      use multimon:i:0, winposstr auf den Monitor, Auflösung optional
+Mehrere Monitore: use multimon:i:1, selectedmonitors (erste ID = Hauptmonitor)
+
+Hauptmonitor
+Der Hauptmonitor ist der Monitor, auf dem in der Remote-Sitzung Taskleiste und
+Startmenü erscheinen. Rechtsklick auf einen Monitor (oder Taste H) legt ihn fest.
+Ohne Festlegung: lokaler Primärmonitor, falls ausgewählt, sonst der linke.
+"Primär" kennzeichnet den Hauptbildschirm deines lokalen Windows.
+"IDs prüfen" zeigt die Monitor-IDs von mstsc (mstsc /l) zum Abgleich.
+
+Kommandozeile
+"reitzner RDP Pilot.exe" Test.rdp 2,1            Monitore setzen (erster = Hauptmonitor)
+"reitzner RDP Pilot.exe" Test.rdp 2,1 /connect   setzen und verbinden
+Zusätzlich /backup: vorher Sicherung .rdp.bak anlegen
+
+Quellcode: Quellcode\*.cs   Grafiken: Resources (Icon, App-Icon, reitzner-Logo hell/dunkel)
+Entwürfe: Design (Vorschaubilder, Original des reitzner-Logos)
+
+Info-Fenster
+Klick auf die Versionsnummer oben öffnet das Info-Fenster mit Version,
+Eckdaten, Anleitung und dem Ordner der Verbindungen.
+
+Lizenz
+GNU General Public License v3.0 oder später (siehe LICENSE).
+Ausgenommen ist das reitzner-Logo (Resources\Logo-hell.png, Logo-dunkel.png):
+Marke der reitzner AG, alle Rechte vorbehalten.
+© 2026 Günther Schoder

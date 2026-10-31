@@ -1,0 +1,75 @@
+# reitzner RDP Pilot - automatische Bereitstellung der EXE
+# Baut das Programm, sobald ein Tag v<Version> gepusht wird (oder per Hand
+# ueber "Run workflow" mit Versionsangabe), und legt ein Release mit der EXE an.
+# Existiert das Release zur Version schon, passiert nichts.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (z. B. 1.8.2026.1031)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version lesen
+        id: ver
+        shell: pwsh
+        run: |
+          $ver = '${{ github.event.inputs.version }}'
+          if(-not $ver) { $ver = '${{ github.ref_name }}'.TrimStart('v') }
+          if($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "ungueltige Version: $ver" }
+          "ver=$ver" >> $env:GITHUB_OUTPUT
+          gh release view "v$ver" *> $null
+          if($LASTEXITCODE -eq 0) { "exists=1" >> $env:GITHUB_OUTPUT; Write-Host "Release v$ver existiert bereits" }
+          else { "exists=0" >> $env:GITHUB_OUTPUT }
+          exit 0
+
+      - name: Kompilieren
+        if: steps.ver.outputs.exists == '0'
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.ver }}'
+          @(
+            "[assembly: System.Reflection.AssemblyVersion(`"$ver`")]"
+            "[assembly: System.Reflection.AssemblyFileVersion(`"$ver`")]"
+            "[assembly: System.Reflection.AssemblyInformationalVersion(`"$ver`")]"
+            "namespace RDPilot { public static partial class AppInfo { public const string Version = `"$ver`"; } }"
+          ) | Set-Content Quellcode\VersionInfo.cs -Encoding utf8
+          New-Item -ItemType Directory -Force Bin | Out-Null
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:winexe /optimize+ /codepage:65001 "/out:Bin\reitzner RDP Pilot.exe" `
+            "/win32icon:Resources\RDPilot.ico" "/resource:Resources\RDPilot.ico,RDPilot.ico" `
+            "/resource:Resources\Logo-hell.png,Logo-hell.png" "/resource:Resources\Logo-dunkel.png,Logo-dunkel.png" `
+            "/resource:Resources\AppIcon.png,AppIcon.png" `
+            /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll Quellcode\*.cs
+          if($LASTEXITCODE -ne 0) { throw 'Kompilieren fehlgeschlagen' }
+          (Get-Item "Bin\reitzner RDP Pilot.exe").VersionInfo.FileVersion
+
+      - name: Release anlegen
+        if: steps.ver.outputs.exists == '0'
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.ver }}'
+          Copy-Item "Bin\reitzner RDP Pilot.exe" "Bin\reitzner-RDP-Pilot.exe"
+          $notes = @"
+          **Installation:** ``reitzner-RDP-Pilot.exe`` herunterladen und in den Ordner legen, in dem deine Verbindungen (.rdp-Dateien) liegen. Doppelklick startet das Programm, eine Installation ist nicht noetig. Voraussetzung: Windows 10 oder 11 mit .NET Framework 4.x.
+
+          Bei einem Update die vorhandene EXE einfach ersetzen.
+
+          **Installation (English):** download ``reitzner-RDP-Pilot.exe`` and put it into the folder that contains your connections (.rdp files). Double-click to start, no installation needed. Requires Windows 10 or 11 with .NET Framework 4.x.
+          "@
+          gh release create "v$ver" "Bin\reitzner-RDP-Pilot.exe" --title "reitzner RDP Pilot $ver" --notes $notes --target $env:GITHUB_SHA
