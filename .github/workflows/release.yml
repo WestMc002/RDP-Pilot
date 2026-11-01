@@ -1,6 +1,8 @@
 # reitzner RDP Pilot - automatische Bereitstellung der EXE
 # Baut das Programm, sobald ein Tag v<Version> gepusht wird (oder per Hand
 # ueber "Run workflow" mit Versionsangabe), und legt ein Release mit der EXE an.
+# Die Release-Seite zeigt oben "Änderungen" (Punkte aus dem Commit-Text,
+# Zeilen mit "- ") und darunter die Installation.
 # Existiert das Release zur Version schon, passiert nichts.
 
 name: Release
@@ -65,11 +67,21 @@ jobs:
         run: |
           $ver = '${{ steps.ver.outputs.ver }}'
           Copy-Item "Bin\reitzner RDP Pilot.exe" "Bin\reitzner-RDP-Pilot.exe"
-          $notes = @"
-          **Installation:** ``reitzner-RDP-Pilot.exe`` herunterladen und in den Ordner legen, in dem deine Verbindungen (.rdp-Dateien) liegen. Doppelklick startet das Programm, eine Installation ist nicht noetig. Voraussetzung: Windows 10 oder 11 mit .NET Framework 4.x.
+          # Abschnitt "Änderungen": Punkte aus dem Commit-Text (Zeilen mit "- " oder "* "),
+          # sonst die erste Zeile ohne vorangestellten Programmnamen und Version
+          $msg = git log -1 --format=%B $env:GITHUB_SHA
+          $items = @($msg | Where-Object { $_ -match '^\s*[-*]\s+\S' } | ForEach-Object { '- ' + ($_ -replace '^\s*[-*]\s+','') })
+          if($items.Count -eq 0) {
+            $subject = ($msg | Select-Object -First 1) -replace '^reitzner RDP Pilot\s+[\d.]+\s*:\s*',''
+            $items = @('- ' + $subject)
+          }
+          $changes = "## `u{00C4}nderungen`n`n" + ($items -join "`n") + "`n`n## Installation`n`n"
+          $install = @"
+          ``reitzner-RDP-Pilot.exe`` herunterladen und in den Ordner legen, in dem deine Verbindungen (.rdp-Dateien) liegen. Doppelklick startet das Programm, eine Installation ist nicht noetig. Voraussetzung: Windows 10 oder 11 mit .NET Framework 4.x.
 
           Bei einem Update die vorhandene EXE einfach ersetzen.
 
-          **Installation (English):** download ``reitzner-RDP-Pilot.exe`` and put it into the folder that contains your connections (.rdp files). Double-click to start, no installation needed. Requires Windows 10 or 11 with .NET Framework 4.x.
+          **English:** download ``reitzner-RDP-Pilot.exe`` and put it into the folder that contains your connections (.rdp files). Double-click to start, no installation needed. Requires Windows 10 or 11 with .NET Framework 4.x.
           "@
-          gh release create "v$ver" "Bin\reitzner-RDP-Pilot.exe" --title "reitzner RDP Pilot $ver" --notes $notes --target $env:GITHUB_SHA
+          $changes + $install | Set-Content notes.md -Encoding utf8
+          gh release create "v$ver" "Bin\reitzner-RDP-Pilot.exe" --title "reitzner RDP Pilot $ver" --notes-file notes.md --target $env:GITHUB_SHA
