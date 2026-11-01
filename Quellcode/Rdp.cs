@@ -26,7 +26,11 @@ public class MonitorInfo {
 }
 
 public static class Monitors {
+ // Feste Beispielmonitore für die Demo-Screenshots (sonst null = echte Monitore)
+ public static List<MonitorInfo> Override;
+
  public static List<MonitorInfo> Load() {
+  if(Override!=null)return new List<MonitorInfo>(Override);
   var all=Screen.AllScreens;
   var list=new List<MonitorInfo>();
   for(int i=0;i<all.Length;i++)

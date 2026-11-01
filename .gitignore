@@ -14,6 +14,9 @@ Quellcode/VersionInfo.cs
 # Anleitungen als Word-Datei (enthalten Screenshots mit echten Daten)
 *.docx
 
+# Fehlerprotokoll der Screenshot-Erstellung
+Screenshots/Fehler.txt
+
 # Windows
 Thumbs.db
 desktop.ini

@@ -30,9 +30,16 @@ static class Program {
  //   "reitzner RDP Pilot.exe" Test.rdp 2,1             -> Monitore setzen (erster = Hauptmonitor), ohne Oberfläche
  //   "reitzner RDP Pilot.exe" Test.rdp 1,2 /connect    -> setzen und Verbindung starten
  //   zusätzlich /backup                                  -> vorher Sicherung .rdp.bak anlegen
+ //   "reitzner RDP Pilot.exe" --screenshots [Ordner]   -> Screenshots für GitHub aus Beispieldaten (Standard: Screenshots)
  [STAThread] static int Main(string[] args) {
   Native.EnableDpiAwareness();
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+  // Screenshots mit Beispieldaten (hell und dunkel) für GitHub, z. B. aus der Erstellen.bat
+  if(args.Length>0&&args[0].Equals("--screenshots",StringComparison.OrdinalIgnoreCase)) {
+   Ui.Init();
+   string outDir=args.Length>1?args[1]:Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Screenshots");
+   return Demo.RunScreenshots(outDir)?0:1;
+  }
   string file=args.Length>0?args[0]:null;
   string monitorArg=args.Length>1&&!args[1].StartsWith("/")&&!args[1].StartsWith("-")?args[1]:null;
   bool connect=args.Any(a=>a.Equals("/connect",StringComparison.OrdinalIgnoreCase)||a.Equals("-connect",StringComparison.OrdinalIgnoreCase));

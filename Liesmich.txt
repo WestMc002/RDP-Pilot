@@ -10,6 +10,10 @@ Die Hauptversion steht in Erstellen.bat (MAJOR), die Nebenversion wird bei
 jedem Erstellen automatisch um eins erhöht (höchste vorhandene Version + 1).
 Bei Fehlern bleibt die alte EXE unverändert; Details stehen in Erstellen.log.
 Nach dem Erstellen werden Vorschaubilder im Ordner Design\Vorschau erzeugt.
+Auf Nachfrage (J, ohne Antwort nach 10 Sekunden Nein) erstellt sie außerdem die
+Screenshots für GitHub im Ordner Screenshots – nur aus Beispieldaten
+(erfundene Verbindungen und drei feste Beispielmonitore), hell und dunkel.
+Direkt: "reitzner RDP Pilot.exe" --screenshots [Zielordner]
 
 Backup
 Nach jedem erfolgreichen Erstellen wird das gesamte Projekt (EXE, Quellcode,

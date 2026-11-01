@@ -496,8 +496,12 @@ public class ModernSelect:Control {
   e.Handled=true;
  }
  protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);if(e.Button==MouseButtons.Left&&Enabled){Focus();OpenMenu();}}
- void OpenMenu() {
-  if(Items.Count==0)return;
+ // Für die Demo-Screenshots: Liste aufklappen und das Menü zurückgeben
+ internal ContextMenuStrip OpenMenuForDemo(){return OpenMenu();}
+ // Für die Demo-Screenshots: Auswahlfeld im aufgeklappten Zustand zeichnen, ohne Menü
+ internal void SetOpenForDemo(bool value){open=value;Invalidate();Update();}
+ ContextMenuStrip OpenMenu() {
+  if(Items.Count==0)return null;
   var menu=new ContextMenuStrip();
   menu.Renderer=new SelectRenderer();
   menu.ShowImageMargin=false;menu.ShowCheckMargin=false;
@@ -514,6 +518,7 @@ public class ModernSelect:Control {
   menu.Closed+=(s,a)=>{open=false;Invalidate();BeginInvoke(new Action(menu.Dispose));};
   open=true;Invalidate();
   menu.Show(this,new Point(0,Height+Ui.Px(4)));
+  return menu;
  }
  protected override void OnPaint(PaintEventArgs e) {
   var g=e.Graphics;

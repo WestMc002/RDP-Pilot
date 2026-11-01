@@ -233,6 +233,10 @@ public class MainForm:Form {
 
  void Status(string text,InfoKind kind){info.SetMessage(text,kind);}
 
+ // Für die Demo-Screenshots: Verbindungsliste aufklappen
+ internal ContextMenuStrip OpenConnectionListForDemo(){return select.OpenMenuForDemo();}
+ internal void SetConnectionListOpenForDemo(bool value){select.SetOpenForDemo(value);}
+
  // --- RDP-Liste ---------------------------------------------------------------
  string CurrentPath(){return select.SelectedIndex>=0&&select.SelectedIndex<paths.Count?paths[select.SelectedIndex]:null;}
 

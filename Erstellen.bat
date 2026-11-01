@@ -92,7 +92,16 @@ REM Optionale projektspezifische Zusatzschritte hier einfuegen
 REM Vorschaubilder der Oberflaeche (hell/dunkel) nach Design\Vorschau
 START "" /WAIT "%EXE%" --preview
 IF EXIST "Design\Vorschau\Vorschau-hell.png" ECHO Vorschau: Design\Vorschau\Vorschau-hell.png und Vorschau-dunkel.png
-REM Bilder fuer GitHub in Screenshots werden von Hand erstellt (nicht ueberschreiben)
+REM Screenshots fuer GitHub aus Beispieldaten (hell und dunkel) nach Screenshots,
+REM nur auf Nachfrage: ohne Antwort nach 10 Sekunden Nein, bei /nopause nie
+IF /I "%~1"=="/nopause" GOTO :NOSHOTS
+ECHO.
+CHOICE /C JN /T 10 /D N /M "Screenshots fuer GitHub erstellen (nach 10 s automatisch Nein)"
+IF ERRORLEVEL 2 GOTO :NOSHOTS
+ECHO Erstelle Screenshots (bitte Maus und Tastatur kurz nicht benutzen) ...
+START "" /WAIT "%EXE%" --screenshots "%CD%\Screenshots"
+IF ERRORLEVEL 1 (ECHO Hinweis: Screenshots fehlgeschlagen - siehe Screenshots\Fehler.txt) ELSE (ECHO Screenshots erstellt.)
+:NOSHOTS
 
 REM Sicherung: komplettes Projekt nach Backup\<Projekt> v<Version>
 SET "BAKDIR=Backup\%NAME% v%VER%"

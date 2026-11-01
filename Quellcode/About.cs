@@ -42,7 +42,7 @@ public class AboutDialog:Form {
   return null;
  }
 
- AboutDialog(string folder) {
+ internal AboutDialog(string folder) {
   this.folder=folder;
   Text="Info über "+AppInfo.FullName;
   try {Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);} catch {}
@@ -80,7 +80,8 @@ public class AboutDialog:Form {
   AddRow(table,tip,"Entwickler",AppInfo.Company);
   AddRow(table,tip,"Erstellt",built);
   AddRow(table,tip,"Farbschema",(Ui.Dark?"dunkel":"hell")+" (folgt Windows)");
-  AddRow(table,tip,"Programm",AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'));
+  // Bei den Demo-Screenshots kein privater Pfad im Bild
+  AddRow(table,tip,"Programm",Demo.Active?Demo.DemoProgramFolder:AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'));
   card.Controls.Add(table);
   Controls.Add(card);
   y+=card.Height+Ui.Px(24);

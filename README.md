@@ -24,6 +24,17 @@
   </tr>
 </table>
 
+<table>
+  <tr>
+    <td><img src="Screenshots/info-hell.png" alt="About window, light mode / Info-Fenster, hell"></td>
+    <td><img src="Screenshots/info-dunkel.png" alt="About window, dark mode / Info-Fenster, dunkel"></td>
+  </tr>
+  <tr>
+    <td align="center">About · Info</td>
+    <td align="center">About · Info</td>
+  </tr>
+</table>
+
 Author / Autor: Günther Schoder · [www.westmc002.de](https://www.westmc002.de)
 
 ---
