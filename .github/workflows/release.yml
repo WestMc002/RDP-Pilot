@@ -74,7 +74,8 @@ jobs:
           $lines += ""
           $lines += "1. ``$zip`` herunterladen und in einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (.rdp-Dateien) liegen. Eine Installation ist nicht nötig."
           $lines += "2. ``reitzner RDP Pilot.exe`` per Doppelklick starten. Das Programm zeigt alle .rdp-Dateien aus seinem Ordner an."
-          $lines += "3. Verbindung auswählen, die gewünschten Monitore anklicken (Hauptmonitor per Rechtsklick) und „Speichern & verbinden“ wählen."
+          # Typografische Anführungszeichen nur in '...' - PowerShell wertet sie in "..." als Stringende
+          $lines += '3. Verbindung auswählen, die gewünschten Monitore anklicken (Hauptmonitor per Rechtsklick) und „Speichern & verbinden“ wählen.'
           $lines += ""
           $lines += "Bei einem Update die vorhandene EXE einfach ersetzen."
           $lines += ""
