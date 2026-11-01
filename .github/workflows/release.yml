@@ -1,19 +1,22 @@
-# reitzner RDP Pilot - automatische Bereitstellung der EXE
-# Baut das Programm, sobald ein Tag v<Version> gepusht wird (oder per Hand
-# ueber "Run workflow" mit Versionsangabe), und legt ein Release mit der EXE an.
-# Die Release-Seite zeigt oben "Änderungen" (Punkte aus dem Commit-Text,
-# Zeilen mit "- ") und darunter die Installation.
-# Existiert das Release zur Version schon, passiert nichts.
+# reitzner RDP Pilot - automatische Bereitstellung als Download (Release)
+# Ausloeser: Aenderung dieser Datei auf main oder per Hand ueber "Run workflow"
+# mit Versionsangabe. Die Version kommt sonst aus dem neuesten Commit
+# "reitzner RDP Pilot <Version> - Aenderungen".
+# Gibt es das Release zur Version noch nicht, wird gebaut und das Release mit
+# dem ZIP angelegt. Gibt es es schon, wird nur der Release-Text aufgefrischt.
+# Release-Text: oben "Aenderungen" (Zeilen mit "- " aus dem neuesten Commit,
+# der die Versionsnummer nennt), darunter "Installation".
 
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (z. B. 1.8.2026.1031)'
+        description: 'Version (z. B. 1.12.2026.1101)'
         required: true
 
 permissions:
@@ -26,19 +29,60 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Version lesen
         id: ver
         shell: pwsh
         run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $ver = '${{ github.event.inputs.version }}'
-          if(-not $ver) { $ver = '${{ github.ref_name }}'.TrimStart('v') }
-          if($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "ungueltige Version: $ver" }
+          if(-not $ver) {
+            $subjects = git log --format=%s
+            foreach($s in $subjects) {
+              if($s -match '^reitzner RDP Pilot v?(\d+\.\d+\.\d+\.\d+)') { $ver = $Matches[1]; break }
+            }
+          }
+          if($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "ungueltige oder fehlende Version: $ver" }
           "ver=$ver" >> $env:GITHUB_OUTPUT
           gh release view "v$ver" *> $null
-          if($LASTEXITCODE -eq 0) { "exists=1" >> $env:GITHUB_OUTPUT; Write-Host "Release v$ver existiert bereits" }
+          if($LASTEXITCODE -eq 0) { "exists=1" >> $env:GITHUB_OUTPUT; Write-Host "Release v$ver existiert bereits - nur Text auffrischen" }
           else { "exists=0" >> $env:GITHUB_OUTPUT }
           exit 0
+
+      - name: Release-Text erstellen
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $ver = '${{ steps.ver.outputs.ver }}'
+          # Neuester Commit, dessen Text die Versionsnummer nennt
+          $hash = git log --format=%H --fixed-strings --grep="$ver" -n 1
+          $items = @()
+          if($hash) {
+            $msg = git log -1 --format=%B $hash
+            $items = @($msg | Where-Object { $_ -match '^\s*[-*]\s+\S' } | ForEach-Object { "- " + ($_ -replace '^\s*[-*]\s+','') })
+          }
+          if($items.Count -eq 0) { throw "Kein Commit mit Versionsnummer $ver und Aenderungspunkten gefunden" }
+          $zip = "reitzner-RDP-Pilot-$ver.zip"
+          $lines = @()
+          $lines += "## Änderungen"
+          $lines += ""
+          $lines += $items
+          $lines += ""
+          $lines += "## Installation"
+          $lines += ""
+          $lines += "1. ``$zip`` herunterladen und in einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (.rdp-Dateien) liegen. Eine Installation ist nicht nötig."
+          $lines += "2. ``reitzner RDP Pilot.exe`` per Doppelklick starten. Das Programm zeigt alle .rdp-Dateien aus seinem Ordner an."
+          $lines += "3. Verbindung auswählen, die gewünschten Monitore anklicken (Hauptmonitor per Rechtsklick) und „Speichern & verbinden“ wählen."
+          $lines += ""
+          $lines += "Bei einem Update die vorhandene EXE einfach ersetzen."
+          $lines += ""
+          $lines += "Voraussetzungen: Windows 10 oder 11 mit .NET Framework 4.x."
+          $lines += ""
+          $lines += "Eine ausführliche Beschreibung steht in ``Liesmich.txt`` im ZIP."
+          [System.IO.File]::WriteAllText("$PWD\notes.md", ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+          Get-Content notes.md -Encoding utf8
 
       - name: Kompilieren
         if: steps.ver.outputs.exists == '0'
@@ -66,22 +110,14 @@ jobs:
         shell: pwsh
         run: |
           $ver = '${{ steps.ver.outputs.ver }}'
-          Copy-Item "Bin\reitzner RDP Pilot.exe" "Bin\reitzner-RDP-Pilot.exe"
-          # Abschnitt "Änderungen": Punkte aus dem Commit-Text (Zeilen mit "- " oder "* "),
-          # sonst die erste Zeile ohne vorangestellten Programmnamen und Version
-          $msg = git log -1 --format=%B $env:GITHUB_SHA
-          $items = @($msg | Where-Object { $_ -match '^\s*[-*]\s+\S' } | ForEach-Object { '- ' + ($_ -replace '^\s*[-*]\s+','') })
-          if($items.Count -eq 0) {
-            $subject = ($msg | Select-Object -First 1) -replace '^reitzner RDP Pilot\s+[\d.]+\s*:\s*',''
-            $items = @('- ' + $subject)
-          }
-          $changes = "## `u{00C4}nderungen`n`n" + ($items -join "`n") + "`n`n## Installation`n`n"
-          $install = @"
-          ``reitzner-RDP-Pilot.exe`` herunterladen und in den Ordner legen, in dem deine Verbindungen (.rdp-Dateien) liegen. Doppelklick startet das Programm, eine Installation ist nicht noetig. Voraussetzung: Windows 10 oder 11 mit .NET Framework 4.x.
+          $zip = "Bin\reitzner-RDP-Pilot-$ver.zip"
+          Copy-Item Liesmich.txt Bin\
+          Compress-Archive -Path "Bin\reitzner RDP Pilot.exe","Bin\Liesmich.txt" -DestinationPath $zip -Force
+          gh release create "v$ver" $zip --title "reitzner RDP Pilot $ver" --notes-file notes.md --target $env:GITHUB_SHA
 
-          Bei einem Update die vorhandene EXE einfach ersetzen.
-
-          **English:** download ``reitzner-RDP-Pilot.exe`` and put it into the folder that contains your connections (.rdp files). Double-click to start, no installation needed. Requires Windows 10 or 11 with .NET Framework 4.x.
-          "@
-          $changes + $install | Set-Content notes.md -Encoding utf8
-          gh release create "v$ver" "Bin\reitzner-RDP-Pilot.exe" --title "reitzner RDP Pilot $ver" --notes-file notes.md --target $env:GITHUB_SHA
+      - name: Release-Text auffrischen
+        if: steps.ver.outputs.exists == '1'
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.ver }}'
+          gh release edit "v$ver" --notes-file notes.md

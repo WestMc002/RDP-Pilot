@@ -46,9 +46,9 @@ The interface is in **German**.
 
 ### Installation
 
-1. Download `reitzner-RDP-Pilot.exe` from the [Releases](https://github.com/WestMc002/RDP-Pilot/releases).
-2. Put it into the folder that contains your connections (`.rdp` files).
-3. Double-click to start. No installation needed.
+1. Download `reitzner-RDP-Pilot-<version>.zip` from the [Releases](https://github.com/WestMc002/RDP-Pilot/releases).
+2. Unzip it into a folder of its own with write access, ideally the folder that contains your connections (`.rdp` files).
+3. Double-click `reitzner RDP Pilot.exe` to start. No installation needed.
 
 Requirements: Windows 10 or 11 with .NET Framework 4.x.
 
@@ -83,9 +83,9 @@ Einmal festlegen, auf welchem Bildschirm – oder auf welchen Bildschirmen – e
 
 ### Installation
 
-1. `reitzner-RDP-Pilot.exe` aus den [Releases](https://github.com/WestMc002/RDP-Pilot/releases) herunterladen.
-2. In den Ordner legen, in dem deine Verbindungen (`.rdp`-Dateien) liegen.
-3. Per Doppelklick starten. Eine Installation ist nicht nötig.
+1. `reitzner-RDP-Pilot-<Version>.zip` aus den [Releases](https://github.com/WestMc002/RDP-Pilot/releases) herunterladen.
+2. In einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (`.rdp`-Dateien) liegen.
+3. `reitzner RDP Pilot.exe` per Doppelklick starten. Eine Installation ist nicht nötig.
 
 Voraussetzungen: Windows 10 oder 11 mit .NET Framework 4.x.
 
