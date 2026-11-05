@@ -16,6 +16,8 @@ namespace RDPilot {
 public class AboutDialog:Form {
  static AboutDialog open;
  readonly string folder;
+ // Update-Prüfung des Hauptfensters (Stand, "Jetzt prüfen", automatisch prüfen); null = ohne Updates-Zeilen
+ internal static UpdateHooks Updates;
 
  public static void ShowFor(Form owner,string folder) {
   if(open!=null){open.Activate();return;}
@@ -55,7 +57,16 @@ public class AboutDialog:Form {
   AutoScaleMode=AutoScaleMode.None;
   BackColor=Ui.Bg;ForeColor=Ui.TextColor;Font=Ui.UiFont;
 
-  int W=Ui.Px(480);
+  // Screenshots: keine Prüfung, Stand fest "Aktuell" (Globale Richtlinien)
+  string today="Zuletzt geprüft "+DateTime.Now.ToString("dd.MM.yyyy");
+  var updates=Demo.Active?new UpdateHooks{
+   Status=()=>new UpdateStatus(UpdateKind.Current,"Aktuell",today),
+   Auto=()=>true,
+   SetAuto=on=>{},
+   CheckNow=()=>System.Threading.Tasks.Task.FromResult(new UpdateStatus(UpdateKind.Current,"Aktuell",today)),
+   CanInstall=()=>false
+  }:Updates;
+  int W=Ui.Px(updates!=null?540:480); // mit Updates-Zeilen breiter
   int y=Ui.Px(24);
 
   Image logo=ReitznerLogo(Ui.Dark);
@@ -70,7 +81,7 @@ public class AboutDialog:Form {
   y+=Ui.Px(40);
 
   // Karte mit Eckdaten
-  var card=new Card{Location=new Point(Ui.Px(24),y),Size=new Size(W-Ui.Px(48),Ui.Px(140)),Padding=new Padding(Ui.Px(14),Ui.Px(10),Ui.Px(14),Ui.Px(10))};
+  var card=new Card{Location=new Point(Ui.Px(24),y),Size=new Size(W-Ui.Px(48),Ui.Px(132)+(updates!=null?Ui.Px(60)+Ui.Px(32):0)),Padding=new Padding(Ui.Px(14),Ui.Px(10),Ui.Px(14),Ui.Px(10))};
   var table=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,BackColor=Ui.Surface};
   table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,Ui.Px(118)));
   table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
@@ -82,6 +93,7 @@ public class AboutDialog:Form {
   AddRow(table,tip,"Farbschema",(Ui.Dark?"dunkel":"hell")+" (folgt Windows)");
   // Bei den Demo-Screenshots kein privater Pfad im Bild
   AddRow(table,tip,"Programm",Demo.Active?Demo.DemoProgramFolder:AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'));
+  if(updates!=null)AddUpdateRows(table,updates);
   card.Controls.Add(table);
   Controls.Add(card);
   y+=card.Height+Ui.Px(24);
@@ -118,7 +130,95 @@ public class AboutDialog:Form {
   return null;
  }
 
- void AddRow(TableLayoutPanel t,ToolTip tip,string name,string value) {
+ // Updates (Globale Richtlinien): Symbol und Stand, darunter die letzte Prüfung, rechts ein kleiner Knopf
+ // ("Jetzt prüfen", bei neuer Version "Aktualisieren" bzw. "Release-Seite"), darunter "Automatisch prüfen"
+ void AddUpdateRows(TableLayoutPanel t,UpdateHooks updates) {
+  int row=t.RowCount;
+  t.RowCount=row+2;
+  t.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(60)));
+  t.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(32)));
+  t.Controls.Add(new Label{Text="Updates",ForeColor=Ui.Muted,BackColor=Ui.Surface,AutoSize=false,Size=new Size(Ui.Px(110),Ui.Px(22)),
+   Anchor=AnchorStyles.Top|AnchorStyles.Left,Margin=new Padding(3,Ui.Px(9),3,0),TextAlign=ContentAlignment.MiddleLeft},0,row);
+
+  var cell=new Panel{Dock=DockStyle.Fill,BackColor=Ui.Surface,Margin=new Padding(3,0,3,0)};
+  var glyph=new StatusGlyph{BackColor=Ui.Surface,Size=new Size(Ui.Px(20),Ui.Px(22)),Location=new Point(0,Ui.Px(9))};
+  var title=new Label{ForeColor=Ui.TextColor,BackColor=Ui.Surface,AutoSize=false,AutoEllipsis=true,UseMnemonic=false,TextAlign=ContentAlignment.MiddleLeft};
+  var detail=new Label{ForeColor=Ui.Muted,BackColor=Ui.Surface,AutoSize=false,AutoEllipsis=true,UseMnemonic=false,TextAlign=ContentAlignment.TopLeft,Font=new Font("Segoe UI",8.75f)};
+  var check=new ModernButton("Jetzt prüfen",ButtonKind.Secondary,Glyphs.Refresh);
+  var install=new ModernButton("Aktualisieren",ButtonKind.Primary,Glyphs.Download);
+  var page=new ModernButton("Release-Seite",ButtonKind.Secondary,Glyphs.Link);
+  var tip=new ToolTip();
+  tip.SetToolTip(install,"Programm beenden, auf die neue Version aktualisieren und neu starten");
+  tip.SetToolTip(page,"Öffnet die Release-Seite auf GitHub");
+  foreach(var b in new[]{check,install,page}) {
+   b.Margin=Padding.Empty;
+   b.Height=Ui.Px(30);
+   cell.Controls.Add(b);
+  }
+  cell.Controls.Add(glyph);cell.Controls.Add(title);cell.Controls.Add(detail);
+
+  Action layout=()=>{
+   // Knopf rechtsbündig mit dem Schalter darunter und auf Höhe der ersten Zeile,
+   // damit die zweite Zeile (letzte Prüfung) die volle Breite hat
+   int right=cell.Width-Ui.Px(2);
+   foreach(var b in new[]{check,install,page})b.Location=new Point(right-b.Width,Ui.Px(20)-b.Height/2);
+   var shown=install.Visible?install:page.Visible?page:check;
+   int tx=Ui.Px(28),tw=Math.Max(Ui.Px(40),shown.Left-Ui.Px(12)-tx);
+   title.SetBounds(tx,Ui.Px(9),tw,Ui.Px(22));
+   detail.SetBounds(tx,Ui.Px(33),Math.Max(Ui.Px(40),cell.Width-tx),Ui.Px(20));
+  };
+  cell.Resize+=(s,e)=>layout();
+
+  Action<UpdateStatus> show=st=>{
+   switch(st.Kind) {
+    case UpdateKind.Current:glyph.Set(Glyphs.Completed,Ui.SuccessColor);break;
+    case UpdateKind.Available:glyph.Set(Glyphs.Download,Ui.Accent);break;
+    case UpdateKind.Failed:glyph.Set(Glyphs.Warning,Ui.ErrorColor);break;
+    case UpdateKind.Checking:glyph.Set(Glyphs.Sync,Ui.Muted);break;
+    default:glyph.Set(Glyphs.Info,Ui.Muted);break;
+   }
+   title.Text=st.Title;
+   title.ForeColor=st.Kind==UpdateKind.Available?Ui.Accent:st.Kind==UpdateKind.Checking?Ui.Muted:Ui.TextColor;
+   detail.Text=st.Detail;
+   tip.SetToolTip(detail,st.Detail);
+   bool available=st.Kind==UpdateKind.Available;
+   bool canInstall=available&&updates.CanInstall!=null&&updates.CanInstall();
+   install.Visible=canInstall;
+   page.Visible=available&&!canInstall;
+   check.Visible=!available;
+   check.Enabled=st.Kind!=UpdateKind.Checking;
+   layout();
+  };
+
+  check.Click+=async (s,e)=>{
+   show(new UpdateStatus(UpdateKind.Checking,"Prüfe auf GitHub …",""));
+   UpdateStatus st;
+   try {st=await updates.CheckNow();}
+   catch(Exception ex){st=new UpdateStatus(UpdateKind.Failed,"Prüfung nicht möglich",ex.Message);}
+   if(!IsDisposed)show(st);
+  };
+  install.Click+=(s,e)=>{
+   Close();
+   if(updates.Install!=null)updates.Install();
+  };
+  page.Click+=(s,e)=>{if(updates.OpenPage!=null)updates.OpenPage();};
+  show(updates.Status());
+  t.Controls.Add(cell,1,row);
+
+  // Automatisch prüfen: Text bündig mit den Werten darüber, Schalter rechts
+  var autoCell=new Panel{Dock=DockStyle.Fill,BackColor=Ui.Surface,Margin=new Padding(3,0,3,0)};
+  var auto=new ToggleSwitch{BackColor=Ui.Surface,Dock=DockStyle.Right};
+  auto.Checked=updates.Auto();
+  var autoText=new Label{Text="Automatisch prüfen",ForeColor=Ui.TextColor,BackColor=Ui.Surface,Dock=DockStyle.Fill,
+   TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,Cursor=Cursors.Hand,UseMnemonic=false};
+  autoText.Click+=(s,e)=>auto.Checked=!auto.Checked;
+  auto.CheckedChanged+=(s,e)=>{if(updates.SetAuto!=null)updates.SetAuto(auto.Checked);};
+  autoCell.Controls.Add(autoText);
+  autoCell.Controls.Add(auto);
+  t.Controls.Add(autoCell,1,row+1);
+ }
+
+ Label AddRow(TableLayoutPanel t,ToolTip tip,string name,string value) {
   int row=t.RowCount;
   t.RowCount=row+1;
   t.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(28)));
@@ -126,6 +226,7 @@ public class AboutDialog:Form {
   var v=new Label{Text=value,ForeColor=Ui.TextColor,BackColor=Ui.Surface,Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true,UseMnemonic=false};
   tip.SetToolTip(v,value);
   t.Controls.Add(v,1,row);
+  return v;
  }
 
  // Anleitung: zuerst die ausführliche Anleitung (Word), sonst Liesmich.txt

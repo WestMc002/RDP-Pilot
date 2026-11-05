@@ -54,10 +54,11 @@ The interface is in **German**.
 - **Optional backup** of the original connection as `.rdp.bak`, restorable with one click
 - **Command line** for shortcuts and scripts
 - **Windows 11 design:** light/dark mode and Windows accent color, help texts on mouse-over
+- **Update check:** shows at startup when a newer version is available on GitHub
 
 ### Installation
 
-1. Download `reitzner-RDP-Pilot-<version>.zip` from the [Releases](https://github.com/WestMc002/RDP-Pilot/releases).
+1. Download `reitzner-RDP-Pilot-<version>.zip` from the [Releases](https://github.com/WestMc002/reitzner-RDP-Pilot/releases).
 2. Unzip it into a folder of its own with write access, ideally the folder that contains your connections (`.rdp` files).
 3. Double-click `reitzner RDP Pilot.exe` to start. No installation needed.
 
@@ -91,10 +92,11 @@ Einmal festlegen, auf welchem Bildschirm – oder auf welchen Bildschirmen – e
 - **Optionale Sicherung** der Originalverbindung als `.rdp.bak`, mit einem Klick wiederherstellbar
 - **Kommandozeile** für Verknüpfungen und Skripte
 - **Windows-11-Design:** heller/dunkler Modus und Windows-Akzentfarbe, Hilfetexte bei Mouseover
+- **Update-Prüfung:** zeigt beim Start, wenn auf GitHub eine neuere Version bereitsteht
 
 ### Installation
 
-1. `reitzner-RDP-Pilot-<Version>.zip` aus den [Releases](https://github.com/WestMc002/RDP-Pilot/releases) herunterladen.
+1. `reitzner-RDP-Pilot-<Version>.zip` aus den [Releases](https://github.com/WestMc002/reitzner-RDP-Pilot/releases) herunterladen.
 2. In einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (`.rdp`-Dateien) liegen.
 3. `reitzner RDP Pilot.exe` per Doppelklick starten. Eine Installation ist nicht nötig.
 

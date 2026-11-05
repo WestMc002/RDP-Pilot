@@ -31,6 +31,26 @@ static class Native {
    int text=ColorRef(Ui.TextColor);DwmSetWindowAttribute(handle,36,ref text,4);
   } catch {}
  }
+ // Windows 11 (Build 22000 oder höher)
+ static int build=-1;
+ public static bool IsWindows11 {
+  get {
+   if(build<0) {
+    build=0;
+    try {
+     using(var key=Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion")) {
+      int b;
+      if(key!=null&&Int32.TryParse(Convert.ToString(key.GetValue("CurrentBuildNumber")),out b))build=b;
+     }
+    } catch {}
+   }
+   return build>=22000;
+  }
+ }
+ // Runde Ecken für Menüs (Windows 11 zeichnet dazu selbst den passenden Schatten)
+ public static void RoundCorners(IntPtr handle) {
+  try {int pref=3;DwmSetWindowAttribute(handle,33,ref pref,4);} catch {} // DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUNDSMALL
+ }
  public static void DarkScroll(Control control) {
   try {SetWindowTheme(control.Handle,Ui.Dark?"DarkMode_Explorer":"Explorer",null);} catch {}
  }
@@ -338,16 +358,22 @@ public class HeaderPanel:Panel {
   int y=(Height-title.Height-gap-sub.Height)/2;
   TextRenderer.DrawText(g,Title,Ui.TitleFont,new Point(x,y),Ui.TextColor,flags);
   TextRenderer.DrawText(g,Subtitle,Ui.UiFont,new Point(x+1,y+title.Height+gap),Ui.Muted,flags);
+  // Versions-Plakette nach Globalen Richtlinien: 12 neben dem Textende des Namens (gleiche Flags beim Messen
+  // und Zeichnen), Höhe 21, Schrift Segoe UI 10,5 px, Innenabstand je 8, senkrecht mittig zum Namen
   if(!String.IsNullOrEmpty(Badge)) {
    g.SmoothingMode=SmoothingMode.AntiAlias;
-   Size b=TextRenderer.MeasureText(g,Badge,Ui.SmallFont,Size.Empty,flags);
-   int h=b.Height+Ui.Px(6);
-   var pill=new Rectangle(x+title.Width+Ui.Px(12),y+(title.Height-h)/2+Ui.Px(2),b.Width+Ui.Px(18),h);
-   pillRect=pill;
-   using(var path=Ui.Round(pill,h/2))
-   using(var brush=new SolidBrush(Ui.Blend(Ui.Bg,Ui.Accent,pillHover?0.26f:0.14f)))
-   using(var pen=new Pen(Ui.Blend(Ui.Bg,Ui.Accent,0.38f))) {g.FillPath(brush,path);g.DrawPath(pen,path);}
-   TextRenderer.DrawText(g,Badge,Ui.SmallFont,pill,Ui.Blend(Ui.Accent,Ui.Tint,0.25f),flags|TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);
+   using(var pillFont=new Font("Segoe UI",10.5f*Ui.S,GraphicsUnit.Pixel)) {
+    Size b=TextRenderer.MeasureText(g,Badge,pillFont,Size.Empty,flags);
+    int h=(int)Math.Round(21*Ui.S);
+    // 12 laut Vorgabe; +2, weil die Buchstaben der Titelschrift (Segoe UI Variable Display) etwas über die
+    // gemessene Breite hinausragen – gemessen bei 175 %: sonst nur 20 statt 23–25 px sichtbarer Abstand
+    var pill=new Rectangle(x+title.Width+(int)Math.Round(14*Ui.S),y+(title.Height-h)/2,b.Width+(int)Math.Round(16*Ui.S),h);
+    pillRect=pill;
+    using(var path=Ui.Round(new RectangleF(pill.X+0.5f,pill.Y+0.5f,pill.Width-1,pill.Height-1),(pill.Height-1)/2f))
+    using(var brush=new SolidBrush(Ui.Blend(Ui.Bg,Ui.Accent,pillHover?0.38f:0.14f)))
+    using(var pen=new Pen(Ui.Blend(Ui.Bg,Ui.Accent,0.38f))) {g.FillPath(brush,path);g.DrawPath(pen,path);}
+    TextRenderer.DrawText(g,Badge,pillFont,pill,Ui.Blend(Ui.Accent,Ui.Tint,0.25f),flags|TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);
+   }
   }
  }
 }
@@ -507,6 +533,11 @@ public class ModernSelect:Control {
   menu.ShowImageMargin=false;menu.ShowCheckMargin=false;
   menu.Padding=new Padding(Ui.Px(4));
   menu.BackColor=Ui.Surface;
+  // Windows 11: runde Ecken mit dem Schatten von Windows, alten eckigen WinForms-Schatten aus (Globale Richtlinien)
+  if(Native.IsWindows11) {
+   menu.DropShadowEnabled=false;
+   menu.HandleCreated+=(s,a)=>Native.RoundCorners(menu.Handle);
+  }
   for(int i=0;i<Items.Count;i++) {
    var item=new SelectMenuItem(Items[i],i==selected,Width-Ui.Px(10));
    int index=i;

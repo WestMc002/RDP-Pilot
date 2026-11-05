@@ -51,7 +51,7 @@ static class Demo {
     // Hintergrundfläche einmal vorab anzeigen, damit das erste Anzeigen nichts anderes schließt
     backdrop.Cover(new Rectangle(area.Right-2,area.Bottom-2,1,1),Color.Black);
     Pump(300);
-    backdrop.Hide();
+    backdrop.Park();
 
     foreach(bool dark in new[]{false,true}) {
      Ui.ApplyPalette(dark);
@@ -168,7 +168,7 @@ static class Demo {
    backdrop.Cover(r,Color.White,targets);
    Pump(300);
    using(var onWhite=Grab(r)) {
-    backdrop.Hide();
+    backdrop.Park();
     return Combine(onBlack,onWhite);
    }
   }
@@ -250,6 +250,14 @@ static class Demo {
    SetWindowPos(Handle,HwndTopmost,0,0,0,0,NoMoveSizeActivate);
    foreach(var t in targets)SetWindowPos(t,HwndTopmost,0,0,0,0,NoMoveSizeActivate);
    Refresh();
+  }
+
+  // Zwischen zwei Aufnahmen ausblenden. Nur außerhalb des Bildschirms parken reicht nicht: Dann blieb die Fläche
+  // im zweiten Durchgang (dunkel) vor dem Hauptfenster bzw. rutschte hinter das Konsolenfenster der Erstellen.bat.
+  // Vor Schwarz und Weiß derselben Aufnahme wird sie nicht neu eingeblendet, nur umgefärbt (Globale Richtlinien),
+  // und nach dem Einblenden wartet Capture 300 ms, bis Windows fertig eingeblendet hat.
+  public void Park() {
+   Hide();
   }
 
   static readonly IntPtr HwndTopmost=new IntPtr(-1);

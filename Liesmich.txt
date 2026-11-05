@@ -56,6 +56,24 @@ Info-Fenster
 Klick auf die Versionsnummer oben öffnet das Info-Fenster mit Version,
 Eckdaten, Anleitung und dem Ordner der Verbindungen.
 
+Update-Prüfung
+Kurz nach dem Start fragt das Programm still auf GitHub nach, ob es eine neuere
+Version gibt (github.com/WestMc002/reitzner-RDP-Pilot, nur lesend, ohne Anmeldung,
+höchstens alle 20 Stunden). Gibt es eine, erscheint oben im Fenster ein Hinweis
+mit "Jetzt aktualisieren", "Release-Seite" und "Später".
+"Jetzt aktualisieren" lädt das ZIP, beendet das Programm, ersetzt EXE und
+Liesmich (mit Sicherung) und startet neu; die Verbindungen bleiben unverändert.
+Im Info-Fenster zeigt die Zeile "Updates" den Stand und die letzte Prüfung,
+"Jetzt prüfen" prüft von Hand, "Automatisch prüfen" schaltet die Prüfung ab.
+Gespeichert wird das unter %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini.
+Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
+
+Versionen
+1.18  Prüfung auf Updates über GitHub mit Selbst-Update (Hinweis oben im Fenster,
+      Stand und "Automatisch prüfen" im Info-Fenster)
+1.14  Neues Programmsymbol
+1.12  Erste Veröffentlichung auf GitHub
+
 Lizenz
 GNU General Public License v3.0 oder später (siehe LICENSE).
 Ausgenommen ist das reitzner-Logo (Resources\Logo-hell.png, Logo-dunkel.png):

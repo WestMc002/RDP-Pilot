@@ -34,9 +34,15 @@ static class Program {
  [STAThread] static int Main(string[] args) {
   Native.EnableDpiAwareness();
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
+  // Neustart durch das Update-Skript: Ergebnis im Hauptfenster melden, sonst normal starten
+  if(args.Length>0&&args[0].Equals("--nach-update",StringComparison.OrdinalIgnoreCase)) {
+   MainForm.AfterUpdate=true;
+   args=args.Skip(1).ToArray();
+  }
   // Screenshots mit Beispieldaten (hell und dunkel) für GitHub, z. B. aus der Erstellen.bat
   if(args.Length>0&&args[0].Equals("--screenshots",StringComparison.OrdinalIgnoreCase)) {
    Ui.Init();
+   UpdateCheck.Disabled=true; // keine Update-Prüfung bei den Screenshots
    string outDir=args.Length>1?args[1]:Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Screenshots");
    return Demo.RunScreenshots(outDir)?0:1;
   }
@@ -54,6 +60,7 @@ static class Program {
 
  // --preview: Vorschaubilder der Oberfläche (hell und dunkel) nach "Design\Vorschau"
  static int Preview() {
+  UpdateCheck.Disabled=true; // keine Update-Prüfung bei den Vorschaubildern
   string dir=Path.Combine(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Design"),"Vorschau");
   return Capture(dir,"Vorschau-hell.png","Vorschau-dunkel.png");
  }

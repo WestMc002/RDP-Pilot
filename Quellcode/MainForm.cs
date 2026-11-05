@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace RDPilot {
@@ -55,6 +56,15 @@ public class MainForm:Form {
 
  HeaderPanel header;
  FooterPanel footer;
+ TableLayoutPanel layout;
+ ToolTip tips;
+ // Update-Prüfung über GitHub (Globale Richtlinien, Abschnitt "Updates")
+ UpdateBar updateBar;
+ UpdateInfo update;        // neuere Version (null = keine)
+ bool updateRunning,installing;
+ string updateError;       // Fehler der letzten Prüfung von Hand (Info-Fenster)
+ // Neustart durch das Update-Skript (--nach-update): Ergebnis melden
+ public static bool AfterUpdate;
  ModernSelect select=new ModernSelect();
  MonitorMap map=new MonitorMap();
  ModernCheck resolution=new ModernCheck("Auflösung an den Monitor anpassen (nur bei einem Monitor)");
@@ -128,16 +138,24 @@ public class MainForm:Form {
   footer.Text="© "+DateTime.Now.Year+" · "+AppInfo.FullName;
   header.BadgeClick+=(s,e)=>AboutDialog.ShowFor(this,folder);
 
-  var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(Ui.Px(24),Ui.Px(18),Ui.Px(24),Ui.Px(16)),ColumnCount=1,RowCount=6,BackColor=Ui.Bg};
+  // Hinweisleiste bei neuer Version (nur sichtbar, wenn es eine gibt)
+  updateBar=new UpdateBar{Dock=DockStyle.Fill,Margin=new Padding(0,0,0,Ui.Px(12)),Visible=false};
+  updateBar.Install.Click+=async (s,e)=>await InstallUpdate();
+  updateBar.Page.Click+=(s,e)=>OpenReleasePage();
+  updateBar.Later.Click+=(s,e)=>ShowUpdateBar(false);
+  AboutDialog.Updates=MakeUpdateHooks();
+
+  layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(Ui.Px(24),Ui.Px(18),Ui.Px(24),Ui.Px(16)),ColumnCount=1,RowCount=7,BackColor=Ui.Bg};
   layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(76)));
+  layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0)); // Update-Hinweis
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(44)+Ui.Px(54)+Ui.Px(16)+Ui.Px(14)));
   layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(52)));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(66)));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(38)));
-  layout.Controls.Add(header,0,0);layout.Controls.Add(connectionCard,0,1);layout.Controls.Add(monitorCard,0,2);
-  layout.Controls.Add(actions,0,3);layout.Controls.Add(info,0,4);layout.Controls.Add(footer,0,5);
+  layout.Controls.Add(header,0,0);layout.Controls.Add(updateBar,0,1);layout.Controls.Add(connectionCard,0,2);layout.Controls.Add(monitorCard,0,3);
+  layout.Controls.Add(actions,0,4);layout.Controls.Add(info,0,5);layout.Controls.Add(footer,0,6);
   Controls.Add(layout);
 
   Rectangle work=Screen.PrimaryScreen.WorkingArea;
@@ -175,7 +193,7 @@ public class MainForm:Form {
   };
 
   // Hilfetexte bei Mouseover
-  var tips=new ToolTip{AutoPopDelay=15000,InitialDelay=400,ReshowDelay=150,ShowAlways=true};
+  tips=new ToolTip{AutoPopDelay=15000,InitialDelay=400,ReshowDelay=150,ShowAlways=true};
   tips.SetToolTip(openFolder,"Öffnet den Ordner mit den Verbindungen im Explorer,\nz.B. um neue .rdp-Dateien hineinzukopieren.");
   tips.SetToolTip(refresh,"Liest den Ordner neu ein, nachdem Verbindungen\nhinzugefügt oder gelöscht wurden.");
   tips.SetToolTip(browse,"Wählt eine .rdp-Datei aus einem anderen Ordner.\nAlternativ die Datei per Drag & Drop auf das Fenster ziehen.");
@@ -232,6 +250,126 @@ public class MainForm:Form {
  }
 
  void Status(string text,InfoKind kind){info.SetMessage(text,kind);}
+
+ // --- Update-Prüfung über GitHub (Globale Richtlinien, Abschnitt "Updates") ----------
+ // Automatisch still kurz nach dem Start, höchstens alle 20 Stunden; nicht bei Vorschaubildern und Screenshots
+ protected override void OnShown(EventArgs e) {
+  base.OnShown(e);
+  if(UpdateCheck.Disabled||Demo.Active)return;
+  UpdateSettings.Load();
+  if(AfterUpdate) {
+   // Neustart durch das Update-Skript: Ergebnis melden
+   string result=UpdateCheck.LastResult();
+   if(result!=null&&result.StartsWith("OK"))Status("Update auf Version "+result.Substring(2).Trim()+" installiert.",InfoKind.Success);
+   else if(result!=null)Status("Update fehlgeschlagen: "+result.Replace("FEHLER","").Trim()+" – die bisherige Version läuft weiter.",InfoKind.Error);
+  }
+  var timer=new System.Windows.Forms.Timer{Interval=2000};
+  timer.Tick+=async (s,a)=>{
+   timer.Stop();
+   timer.Dispose();
+   await CheckForUpdates(false);
+  };
+  timer.Start();
+ }
+
+ UpdateHooks MakeUpdateHooks() {
+  return new UpdateHooks{
+   Status=CurrentUpdateStatus,
+   Auto=()=>{UpdateSettings.Load();return UpdateSettings.Auto;},
+   SetAuto=on=>{UpdateSettings.Auto=on;UpdateSettings.Save();},
+   CheckNow=()=>CheckForUpdates(true),
+   CanInstall=()=>update!=null&&!String.IsNullOrEmpty(update.ZipUrl)&&UpdateCheck.InstallBlocker()==null,
+   Install=()=>BeginInvoke(new Action(()=>{var t=InstallUpdate();})), // erst nach dem Schließen des Info-Fensters
+   OpenPage=OpenReleasePage
+  };
+ }
+
+ // Stand für das Info-Fenster: Symbol, Überschrift und zweite Zeile
+ UpdateStatus CurrentUpdateStatus() {
+  UpdateSettings.Load();
+  string last=UpdateSettings.Last==DateTime.MinValue?"":"Zuletzt geprüft "+UpdateSettings.Last.ToLocalTime().ToString("dd.MM.yyyy");
+  if(update!=null)return new UpdateStatus(UpdateKind.Available,"Version "+update.Version+" verfügbar",last);
+  if(updateError!=null)return new UpdateStatus(UpdateKind.Failed,"Prüfung nicht möglich",updateError);
+  if(UpdateSettings.Last==DateTime.MinValue)return new UpdateStatus(UpdateKind.Unknown,"Noch nicht geprüft","");
+  return new UpdateStatus(UpdateKind.Current,"Aktuell",last);
+ }
+
+ // Neueste Version auf GitHub abfragen. Automatisch (manual = false) höchstens alle 20 Stunden und still,
+ // Fehler dann ohne Meldung. Ergebnis einer Prüfung von Hand erscheint nur im Info-Fenster.
+ async Task<UpdateStatus> CheckForUpdates(bool manual) {
+  if(UpdateCheck.Disabled||Demo.Active||updateRunning)return CurrentUpdateStatus();
+  UpdateSettings.Load();
+  if(!manual&&(!UpdateSettings.Auto||(DateTime.UtcNow-UpdateSettings.Last).TotalHours<20))return CurrentUpdateStatus();
+  updateRunning=true;
+  try {
+   var release=await Task.Run(()=>UpdateCheck.Latest());
+   updateError=null;
+   UpdateSettings.Last=DateTime.UtcNow;
+   UpdateSettings.Save();
+   if(UpdateCheck.IsNewer(release.Version)) {
+    update=release;
+    ShowUpdateBar(true);
+   } else {
+    update=null;
+    ShowUpdateBar(false);
+   }
+  } catch(Exception ex) {
+   if(manual)updateError=ex.Message; // erscheint im Info-Fenster
+  } finally {updateRunning=false;}
+  return CurrentUpdateStatus();
+ }
+
+ void ShowUpdateBar(bool show) {
+  if(IsDisposed)return;
+  show=show&&update!=null;
+  if(show) {
+   updateBar.Text="Neue Version "+update.Version+" verfügbar – installiert ist "+AppInfo.Version+".";
+   string blocker=UpdateCheck.InstallBlocker();
+   updateBar.Install.Enabled=blocker==null&&!String.IsNullOrEmpty(update.ZipUrl);
+   tips.SetToolTip(updateBar.Install,blocker??(String.IsNullOrEmpty(update.ZipUrl)?"Im Release ist keine ZIP-Datei angehängt.":
+    "ZIP herunterladen, Programm beenden, EXE und Liesmich ersetzen und neu starten.\nDie Verbindungen (.rdp-Dateien) bleiben unverändert."));
+   tips.SetToolTip(updateBar.Page,"Öffnet die Release-Seite auf GitHub.");
+   tips.SetToolTip(updateBar.Later,"Blendet den Hinweis bis zum nächsten Start aus.");
+   tips.SetToolTip(updateBar,String.IsNullOrEmpty(update.Notes)?"Die Änderungen stehen auf der Release-Seite.":"Änderungen:\r\n"+update.Notes);
+  }
+  if(show==updateBar.Visible)return;
+  int barHeight=Ui.Px(52)+Ui.Px(12);
+  updateBar.Visible=show;
+  layout.RowStyles[1].Height=show?barHeight:0;
+  // Fenster um die Leiste vergrößern bzw. wieder verkleinern, soweit der Bildschirm reicht
+  if(WindowState==FormWindowState.Normal) {
+   var wa=Screen.FromControl(this).WorkingArea;
+   if(show){int grow=Math.Min(barHeight,wa.Bottom-Bottom);if(grow>0)Height+=grow;}
+   else Height=Math.Max(MinimumSize.Height,Height-barHeight);
+  }
+ }
+
+ void OpenReleasePage() {
+  UpdateCheck.OpenPage(update!=null?update.Url:null);
+ }
+
+ async Task InstallUpdate() {
+  if(update==null||installing)return;
+  var info=update;
+  string text=AppInfo.FullName+" wird beendet, auf Version "+info.Version+" aktualisiert und neu gestartet.\r\n"+
+   "Einstellungen und Verbindungen bleiben erhalten.";
+  if(MessageBox.Show(this,text+"\r\n\r\nJetzt aktualisieren?","Update",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+  installing=true;
+  foreach(var b in new[]{updateBar.Install,updateBar.Page,updateBar.Later})b.Enabled=false;
+  string barText=updateBar.Text;
+  try {
+   updateBar.Text="Lade Version "+info.Version+" …";
+   await UpdateCheck.Install(info,percent=>BeginInvoke(new Action(()=>updateBar.Text="Lade Version "+info.Version+" … "+percent+" %")));
+   Close(); // das Skript wartet auf das Programmende, ersetzt die EXE und startet neu
+  } catch(Exception ex) {
+   MessageBox.Show(this,ex.Message,"Update",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+   updateBar.Text=barText;
+   updateBar.Page.Enabled=true;
+   updateBar.Later.Enabled=true;
+   updateBar.Install.Enabled=UpdateCheck.InstallBlocker()==null;
+   installing=false;
+  }
+ }
 
  // Für die Demo-Screenshots: Verbindungsliste aufklappen
  internal ContextMenuStrip OpenConnectionListForDemo(){return select.OpenMenuForDemo();}
