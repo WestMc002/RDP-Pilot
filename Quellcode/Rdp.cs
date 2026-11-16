@@ -151,6 +151,11 @@ public class RdpFile {
   Lines.RemoveAll(l=>l.StartsWith(prefix,StringComparison.OrdinalIgnoreCase));
  }
 
+ // Kopie der Datei unter einem anderen Pfad (gleiche Zeilen und Kodierung), z. B. für "Nur verbinden"
+ public RdpFile CopyTo(string path) {
+  return new RdpFile{Path=path,Lines=new List<string>(Lines),encoding=encoding};
+ }
+
  // Speichert die Datei. Mit createBackup wird vorher das Original als .rdp.bak gesichert,
  // sofern noch keine Sicherung existiert. Rückgabe: true, wenn eine neue Sicherung angelegt wurde.
  public bool Save(bool createBackup) {

@@ -62,7 +62,9 @@ public class MainForm:Form {
  UpdateBar updateBar;
  UpdateInfo update;        // neuere Version (null = keine)
  bool updateRunning,installing;
- string updateError;       // Fehler der letzten Prüfung von Hand (Info-Fenster)
+ // "Automatisch aktualisieren": ist das Programm beschäftigt, alle 5 Minuten erneut versuchen
+ readonly System.Windows.Forms.Timer autoUpdateRetry=new System.Windows.Forms.Timer{Interval=5*60*1000};
+ UpdateStatus updateFailure; // Ergebnis der letzten Prüfung von Hand bei Fehler bzw. "Nur Vorabversionen" (Info-Fenster)
  // Neustart durch das Update-Skript (--nach-update): Ergebnis melden
  public static bool AfterUpdate;
  ModernSelect select=new ModernSelect();
@@ -219,14 +221,23 @@ public class MainForm:Form {
   tips.SetToolTip(backupCheck,"Sichert vor dem Speichern die unveränderte Verbindung als .rdp.bak.\nEine vorhandene Sicherung bleibt unverändert, damit das Original erhalten bleibt.\nStandardmäßig ausgeschaltet.");
   tips.SetToolTip(connect,"Speichert die Auswahl, startet die Verbindung\nund schließt RDP Pilot.");
   tips.SetToolTip(save,"Speichert die Auswahl in der Verbindung, ohne zu verbinden.");
-  tips.SetToolTip(start,"Startet die Verbindung mit der zuletzt gespeicherten Einstellung.\nNicht gespeicherte Änderungen werden nicht übernommen.");
+  tips.SetToolTip(start,"Startet die Verbindung auf den Monitoren, die gerade ausgewählt sind,\nohne die Verbindung zu ändern. Zum Merken „Speichern“.");
   tips.SetToolTip(restore,"Stellt die Verbindung so wieder her, wie sie vor dem ersten Speichern war.\nNur verfügbar, wenn eine Sicherung (.rdp.bak) existiert.");
   tips.SetToolTip(footer,"Verbindungen aus: "+folder);
   tips.SetToolTip(header,"Klick auf die Versionsnummer: Info über "+AppInfo.FullName);
   tips.SetToolTip(selectionInfo,"Linksklick auf einen Monitor wählt ihn aus oder ab,\nRechtsklick legt den Hauptmonitor fest.");
 
   ApplyTheme();
+  // zuletzt gewählte Verbindung vor dem ersten Einlesen merken (das Einlesen wählt sonst die erste aus)
+  string last=null;
+  if(live){UpdateSettings.Load();last=UpdateSettings.LastFile;}
   ReloadList(null);
+  if(live) {
+   // gemerkte Verbindungen aus anderen Ordnern wieder in die Liste, zuletzt gewählte Verbindung wieder auswählen
+   foreach(string f in UpdateSettings.Files.ToList())
+    if(File.Exists(f))AddPath(f,false);
+   if(String.IsNullOrEmpty(startFile)&&last!=null&&File.Exists(last))AddPath(last,true);
+  }
   if(!String.IsNullOrEmpty(startFile)&&File.Exists(startFile))AddPath(startFile,true);
   if(paths.Count==0)Status("Keine .rdp-Dateien im Ordner gefunden. Lege deine Verbindungen neben die EXE oder wähle über „Andere Datei …“ eine aus.",InfoKind.Warning);
  }
@@ -362,17 +373,38 @@ public class MainForm:Form {
    try {Microsoft.Win32.SystemEvents.DisplaySettingsChanged-=OnDisplayChanged;} catch {}
    if(watcher!=null){try {watcher.EnableRaisingEvents=false;watcher.Dispose();} catch {} watcher=null;}
    folderTimer.Dispose();
+   autoUpdateRetry.Dispose();
    displayTimer.Dispose();
    IdentifyOverlay.CloseAll();
   }
   base.Dispose(disposing);
  }
 
- // "Nur verbinden": vorher prüfen, ob die gespeicherten Bildschirme gerade vorhanden sind
+ // "Nur verbinden": verbindet mit der Auswahl, die gerade im Fenster zu sehen ist, ohne die Datei zu ändern.
+ // Weicht sie von der gespeicherten ab, startet mstsc mit einer Kopie unter %TEMP%\reitzner RDP Pilot,
+ // in die die Auswahl geschrieben wird. Sonst wird die Datei direkt gestartet (vorher Prüfung, ob die
+ // gespeicherten Bildschirme gerade angeschlossen sind).
  void StartOnly() {
   if(current==null)return;
-  ReloadMonitors(false);
-  if(current==null)return;
+  var sel=map.Selection;
+  var main=map.MainMonitor;
+  if(sel.Count>0&&SelectionDiffers(sel,main)) {
+   if(sel.Count>1&&!Monitors.Adjacent(sel)) {
+    var answer=MessageBox.Show(this,"Die gewählten Monitore liegen nicht direkt aneinander.\nDie Remotedesktopverbindung kann das ablehnen.\n\nTrotzdem verbinden?",
+     AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2);
+    if(answer!=DialogResult.Yes)return;
+   }
+   try {
+    string dir=Path.Combine(Path.GetTempPath(),AppInfo.FullName);
+    Directory.CreateDirectory(dir);
+    var copy=current.CopyTo(Path.Combine(dir,Path.GetFileName(current.Path)));
+    copy.ApplyMonitors(sel,resolution.Checked,main);
+    copy.Save(false);
+    Run("mstsc.exe",Quote(copy.Path));
+    Status("Verbunden auf Monitor "+Monitors.Describe(sel)+" – nur für diese Sitzung, die Verbindung selbst ist unverändert. Zum Merken „Speichern“.",InfoKind.Info);
+   } catch(Exception ex){Status("Verbinden nicht möglich: "+ex.Message,InfoKind.Error);}
+   return;
+  }
   string missing=current.MissingMonitors(monitors);
   if(missing!=null) {
    var answer=MessageBox.Show(this,"„"+Path.GetFileNameWithoutExtension(current.Path)+"“ ist auf "+missing+".\n"+
@@ -381,6 +413,18 @@ public class MainForm:Form {
    if(answer!=DialogResult.Yes)return;
   }
   Run("mstsc.exe",Quote(current.Path));
+ }
+
+ // Weicht die Auswahl im Fenster (Monitore oder Hauptmonitor) von der gespeicherten ab?
+ bool SelectionDiffers(IList<MonitorInfo> sel,MonitorInfo main) {
+  var saved=current.CurrentMonitors(monitors);
+  if(current.MissingMonitors(monitors)!=null)return true;
+  if(saved.Count!=sel.Count||saved.Any(m=>!sel.Contains(m)))return true;
+  if(sel.Count>1) {
+   var savedMain=current.CurrentMain(monitors);
+   if(savedMain!=null&&main!=null&&savedMain!=main)return true;
+  }
+  return false;
  }
 
  void Run(string file,string args) {
@@ -403,11 +447,13 @@ public class MainForm:Form {
    if(result!=null&&result.StartsWith("OK"))Status("Update auf Version "+result.Substring(2).Trim()+" installiert.",InfoKind.Success);
    else if(result!=null)Status("Update fehlgeschlagen: "+result.Replace("FEHLER","").Trim()+" – die bisherige Version läuft weiter.",InfoKind.Error);
   }
-  var timer=new System.Windows.Forms.Timer{Interval=2000};
+  // bei jedem Start still prüfen, etwa 15 s nach dem Start, ohne 20-Stunden-Sperre
+  autoUpdateRetry.Tick+=(s,a)=>{autoUpdateRetry.Stop();TryAutoUpdate();};
+  var timer=new System.Windows.Forms.Timer{Interval=15000};
   timer.Tick+=async (s,a)=>{
    timer.Stop();
    timer.Dispose();
-   await CheckForUpdates(false);
+   await CheckForUpdates(false,true);
   };
   timer.Start();
  }
@@ -417,6 +463,9 @@ public class MainForm:Form {
    Status=CurrentUpdateStatus,
    Auto=()=>{UpdateSettings.Load();return UpdateSettings.Auto;},
    SetAuto=on=>{UpdateSettings.Auto=on;UpdateSettings.Save();},
+   AutoInstall=()=>{UpdateSettings.Load();return UpdateSettings.AutoInstall;},
+   // nach dem Einschalten sofort versuchen, wenn schon eine neue Version bekannt ist
+   SetAutoInstall=on=>{UpdateSettings.AutoInstall=on;UpdateSettings.Save();if(on&&update!=null)BeginInvoke(new Action(TryAutoUpdate));},
    CheckNow=()=>CheckForUpdates(true),
    CanInstall=()=>update!=null&&!String.IsNullOrEmpty(update.ZipUrl)&&UpdateCheck.InstallBlocker()==null,
    Install=()=>BeginInvoke(new Action(()=>{var t=InstallUpdate();})), // erst nach dem Schließen des Info-Fensters
@@ -428,35 +477,59 @@ public class MainForm:Form {
  UpdateStatus CurrentUpdateStatus() {
   UpdateSettings.Load();
   string last=UpdateSettings.Last==DateTime.MinValue?"":"Zuletzt geprüft "+UpdateSettings.Last.ToLocalTime().ToString("dd.MM.yyyy");
+  // Fehler zuerst: auch ein fehlgeschlagenes automatisches Update steht so mit "Details" im Info-Fenster
+  if(updateFailure!=null)return updateFailure;
   if(update!=null)return new UpdateStatus(UpdateKind.Available,"Version "+update.Version+" verfügbar",last);
-  if(updateError!=null)return new UpdateStatus(UpdateKind.Failed,"Prüfung nicht möglich",updateError);
   if(UpdateSettings.Last==DateTime.MinValue)return new UpdateStatus(UpdateKind.Unknown,"Noch nicht geprüft","");
   return new UpdateStatus(UpdateKind.Current,"Aktuell",last);
  }
 
- // Neueste Version auf GitHub abfragen. Automatisch (manual = false) höchstens alle 20 Stunden und still,
- // Fehler dann ohne Meldung. Ergebnis einer Prüfung von Hand erscheint nur im Info-Fenster.
- async Task<UpdateStatus> CheckForUpdates(bool manual) {
+ Task<UpdateStatus> CheckForUpdates(bool manual){return CheckForUpdates(manual,false);}
+
+ // Neueste Version auf GitHub abfragen. Automatisch (manual = false) still: beim Start (atStart) immer,
+ // sonst höchstens alle 20 Stunden. Fehler erscheinen nur im Info-Fenster.
+ async Task<UpdateStatus> CheckForUpdates(bool manual,bool atStart) {
   if(UpdateCheck.Disabled||Demo.Active||updateRunning)return CurrentUpdateStatus();
   UpdateSettings.Load();
-  if(!manual&&(!UpdateSettings.Auto||(DateTime.UtcNow-UpdateSettings.Last).TotalHours<20))return CurrentUpdateStatus();
+  if(!manual&&(!UpdateSettings.Auto||(!atStart&&(DateTime.UtcNow-UpdateSettings.Last).TotalHours<20)))return CurrentUpdateStatus();
   updateRunning=true;
   try {
    var release=await Task.Run(()=>UpdateCheck.Latest());
-   updateError=null;
+   updateFailure=null;
    UpdateSettings.Last=DateTime.UtcNow;
    UpdateSettings.Save();
    if(UpdateCheck.IsNewer(release.Version)) {
     update=release;
     ShowUpdateBar(true);
+    // "Automatisch aktualisieren": ohne Rückfrage installieren, sobald nichts mehr läuft (nicht bei "Jetzt prüfen")
+    if(!manual&&UpdateSettings.AutoInstall&&UpdateCheck.InstallBlocker()==null&&!String.IsNullOrEmpty(release.ZipUrl))
+     BeginInvoke(new Action(TryAutoUpdate));
    } else {
     update=null;
     ShowUpdateBar(false);
    }
   } catch(Exception ex) {
-   if(manual)updateError=ex.Message; // erscheint im Info-Fenster
+   // "Nur Vorabversionen" ist kein Fehler: gilt als geprüft
+   if(ex is UpdateCheck.PreReleaseOnlyException){UpdateSettings.Last=DateTime.UtcNow;UpdateSettings.Save();update=null;ShowUpdateBar(false);}
+   updateFailure=UpdateStatus.FromError(ex); // erscheint nur im Info-Fenster
   } finally {updateRunning=false;}
   return CurrentUpdateStatus();
+ }
+
+ // Beschäftigt: ungespeicherte Monitorauswahl oder ein Dialog (Info-Fenster, Rückfrage, Datei öffnen) ist offen
+ bool BusyForUpdate() {
+  if(current!=null&&map.Selection.Count>0&&current.MissingMonitors(monitors)==null&&SelectionDiffers(map.Selection,map.MainMonitor))return true;
+  foreach(Form f in Application.OpenForms)
+   if(f!=this&&f.Visible&&f.Modal)return true;
+  return !CanFocus; // modaler Systemdialog (z. B. Datei öffnen) sperrt das Hauptfenster
+ }
+
+ // "Automatisch aktualisieren": installieren, wenn nichts läuft – sonst alle 5 Minuten erneut versuchen
+ void TryAutoUpdate() {
+  if(IsDisposed||update==null||installing||Demo.Active||!UpdateSettings.AutoInstall||!UpdateSettings.Auto)return;
+  if(UpdateCheck.InstallBlocker()!=null||String.IsNullOrEmpty(update.ZipUrl))return;
+  if(BusyForUpdate()){autoUpdateRetry.Stop();autoUpdateRetry.Start();return;}
+  var t=InstallUpdate(true);
  }
 
  void ShowUpdateBar(bool show) {
@@ -488,12 +561,16 @@ public class MainForm:Form {
   UpdateCheck.OpenPage(update!=null?update.Url:null);
  }
 
- async Task InstallUpdate() {
+ Task InstallUpdate(){return InstallUpdate(false);}
+
+ async Task InstallUpdate(bool automatic) {
   if(update==null||installing)return;
   var info=update;
-  string text=AppInfo.FullName+" wird beendet, auf Version "+info.Version+" aktualisiert und neu gestartet.\r\n"+
-   "Einstellungen und Verbindungen bleiben erhalten.";
-  if(MessageBox.Show(this,text+"\r\n\r\nJetzt aktualisieren?",AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+  if(!automatic) {
+   string text=AppInfo.FullName+" wird beendet, auf Version "+info.Version+" aktualisiert und neu gestartet.\r\n"+
+    "Einstellungen und Verbindungen bleiben erhalten.";
+   if(MessageBox.Show(this,text+"\r\n\r\nJetzt aktualisieren?",AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+  }
   installing=true;
   foreach(var b in new[]{updateBar.Install,updateBar.Page,updateBar.Later})b.Enabled=false;
   string barText=updateBar.Text;
@@ -502,7 +579,9 @@ public class MainForm:Form {
    await UpdateCheck.Install(info,percent=>BeginInvoke(new Action(()=>updateBar.Text="Lade Version "+info.Version+" … "+percent+" %")));
    Close(); // das Skript wartet auf das Programmende, ersetzt die EXE und startet neu
   } catch(Exception ex) {
-   MessageBox.Show(this,"Das Update ist fehlgeschlagen: "+ex.Message,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Warning);
+   // automatisch: keine Meldung – die Hinweisleiste bleibt, die Kurzmeldung mit "Details" steht im Info-Fenster
+   if(automatic)updateFailure=UpdateStatus.FromError(ex);
+   else MessageBox.Show(this,"Das Update ist fehlgeschlagen: "+ex.Message,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Warning);
    updateBar.Text=barText;
    updateBar.Page.Enabled=true;
    updateBar.Later.Enabled=true;
@@ -536,9 +615,31 @@ public class MainForm:Form {
    if(!InFolder(full))title=title+"  ("+Path.GetDirectoryName(full)+")";
    select.Items.Add(new ModernSelect.Item{Title=title,Detail=DescribeFile(full),Tag=full});
    index=paths.Count-1;
+   if(!InFolder(full))RememberFile(full);
   }
   UpdateCount();
   if(selectIt){if(select.SelectedIndex==index)LoadCurrent();else select.SelectedIndex=index;}
+ }
+
+ // Verbindung aus einem anderen Ordner merken, damit sie beim nächsten Start wieder in der Liste steht
+ void RememberFile(string full) {
+  if(!live)return;
+  UpdateSettings.Load();
+  if(UpdateSettings.Files.Contains(full,StringComparer.OrdinalIgnoreCase))return;
+  UpdateSettings.Files.Add(full);
+  // nicht mehr vorhandene Dateien entfernen, Liste begrenzen
+  UpdateSettings.Files.RemoveAll(f=>!File.Exists(f));
+  while(UpdateSettings.Files.Count>UpdateSettings.MaxFiles)UpdateSettings.Files.RemoveAt(0);
+  UpdateSettings.Save();
+ }
+
+ // Zuletzt gewählte Verbindung merken
+ void RememberLast(string full) {
+  if(!live||full==null)return;
+  UpdateSettings.Load();
+  if(String.Equals(UpdateSettings.LastFile,full,StringComparison.OrdinalIgnoreCase))return;
+  UpdateSettings.LastFile=full;
+  UpdateSettings.Save();
  }
 
  void ReloadList(string keep) {
@@ -571,6 +672,7 @@ public class MainForm:Form {
 
  void LoadCurrent() {
   string path=CurrentPath();
+  RememberLast(path);
   current=null;
   if(path!=null) {
    try {

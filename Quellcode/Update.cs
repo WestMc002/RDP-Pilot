@@ -11,6 +11,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -27,11 +28,17 @@ sealed class UpdateInfo {
  public string Notes;   // Abschnitt "Änderungen" als Klartext (Tooltip der Hinweisleiste)
 }
 
-// Einstellungen der Update-Prüfung: %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini
-// (automatisch prüfen ein/aus, Zeitpunkt der letzten Prüfung in UTC nach ISO 8601)
+// Einstellungen: %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini
+// - Update-Prüfung: automatisch prüfen (Standard an), automatisch aktualisieren (Standard aus),
+//   Zeitpunkt der letzten Prüfung in UTC nach ISO 8601
+// - Verbindungen außerhalb des Programmordners ("Andere Datei …", Drag & Drop) und die zuletzt gewählte Verbindung
 static class UpdateSettings {
  public static bool Auto=true;
+ public static bool AutoInstall=false; // neue Version ohne Rückfrage installieren
  public static DateTime Last=DateTime.MinValue; // UTC
+ public static readonly List<string> Files=new List<string>(); // gemerkte .rdp-Dateien aus anderen Ordnern
+ public static string LastFile;                                // zuletzt gewählte Verbindung
+ public const int MaxFiles=30;
  static bool loaded;
 
  static string FilePath {
@@ -48,6 +55,11 @@ static class UpdateSettings {
     if(i<1)continue;
     string key=line.Substring(0,i).Trim(),value=line.Substring(i+1).Trim();
     if(key.Equals("UpdateAuto",StringComparison.OrdinalIgnoreCase))Auto=value!="0";
+    else if(key.Equals("Datei",StringComparison.OrdinalIgnoreCase)) {
+     if(value.Length>0&&!Files.Contains(value,StringComparer.OrdinalIgnoreCase))Files.Add(value);
+    }
+    else if(key.Equals("Zuletzt",StringComparison.OrdinalIgnoreCase))LastFile=value.Length>0?value:null;
+    else if(key.Equals("UpdateAutoInstall",StringComparison.OrdinalIgnoreCase))AutoInstall=value=="1";
     else if(key.Equals("UpdateLast",StringComparison.OrdinalIgnoreCase)) {
      DateTime d;
      if(DateTime.TryParse(value,CultureInfo.InvariantCulture,DateTimeStyles.AdjustToUniversal|DateTimeStyles.AssumeUniversal,out d))Last=d;
@@ -62,6 +74,9 @@ static class UpdateSettings {
    var sb=new StringBuilder();
    sb.Append("UpdateAuto=").Append(Auto?"1":"0").Append("\r\n");
    if(Last!=DateTime.MinValue)sb.Append("UpdateLast=").Append(Last.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'",CultureInfo.InvariantCulture)).Append("\r\n");
+   sb.Append("UpdateAutoInstall=").Append(AutoInstall?"1":"0").Append("\r\n");
+   foreach(string f in Files)sb.Append("Datei=").Append(f).Append("\r\n");
+   if(!String.IsNullOrEmpty(LastFile))sb.Append("Zuletzt=").Append(LastFile).Append("\r\n");
    File.WriteAllText(FilePath,sb.ToString(),new UTF8Encoding(false));
   } catch {}
  }
@@ -87,7 +102,20 @@ static class UpdateCheck {
   try {ServicePointManager.SecurityProtocol|=(SecurityProtocolType)3072;} catch {} // TLS 1.2
  }
 
- // Neueste Veröffentlichung holen. Wirft bei Netz- oder Formatfehlern (mit verständlicher Meldung).
+ // Fehler mit fester Kurzmeldung (Message) und technischem Originaltext für "Details" (Data["Detail"])
+ internal static Exception Fail(string shortText,string detail) {
+  var ex=new Exception(shortText??"");
+  if(!String.IsNullOrEmpty(detail))ex.Data["Detail"]=detail;
+  return ex;
+ }
+
+ // Auf GitHub gibt es (noch) keine fertige Version – kein Fehler
+ internal sealed class PreReleaseOnlyException:Exception {
+  public PreReleaseOnlyException():base("Nur Vorabversionen"){}
+ }
+
+ // Neueste Veröffentlichung holen. Wirft bei Netz- oder Formatfehlern mit fester Kurzmeldung
+ // ("Nicht erreichbar.", "Keine Verbindung.", "Keine Antwort.", "Zu viele Anfragen.", "Antwort unlesbar.").
  public static UpdateInfo Latest() {
   PrepareTls();
   var req=(HttpWebRequest)WebRequest.Create(Api);
@@ -104,17 +132,28 @@ static class UpdateCheck {
    using(var r=new StreamReader(resp.GetResponseStream(),Encoding.UTF8))text=r.ReadToEnd();
   } catch(WebException ex) {
    var http=ex.Response as HttpWebResponse;
-   if(http!=null&&http.StatusCode==HttpStatusCode.NotFound)throw new Exception("Auf GitHub ist noch keine Version veröffentlicht.");
-   if(http!=null&&(int)http.StatusCode==403)throw new Exception("GitHub hat die Anfrage abgelehnt (zu viele Anfragen). Später erneut versuchen.");
-   throw new Exception("GitHub nicht erreichbar: "+ex.Message);
+   // 404 bei /releases/latest: es gibt nur Vorabversionen oder noch nichts – kein Fehler
+   if(http!=null&&http.StatusCode==HttpStatusCode.NotFound)throw new PreReleaseOnlyException();
+   if(http!=null&&(int)http.StatusCode==403)throw Fail("Zu viele Anfragen.",ex.Message);
+   switch(ex.Status) {
+    case WebExceptionStatus.Timeout:
+     throw Fail("Keine Antwort.",ex.Message);
+    case WebExceptionStatus.NameResolutionFailure:
+    case WebExceptionStatus.ProxyNameResolutionFailure:
+    case WebExceptionStatus.ConnectFailure:
+     throw Fail("Keine Verbindung.",ex.Message);
+   }
+   throw Fail("Nicht erreichbar.",ex.Message);
+  } catch(IOException ex) {
+   throw Fail("Nicht erreichbar.",ex.Message);
   }
 
-  var obj=MiniJson.Parse(text) as Dictionary<string,object>;
-  if(obj==null)throw new Exception("Unerwartete Antwort von GitHub.");
-  string tag=obj.ContainsKey("tag_name")?obj["tag_name"] as string:null;
-  if(String.IsNullOrEmpty(tag))throw new Exception("Antwort von GitHub ohne Versionsnummer.");
-  string version=tag.TrimStart('v','V').Trim();
-  if(Parse(version)==null)throw new Exception("Unbekannte Versionsnummer: "+tag);
+  Dictionary<string,object> obj;
+  try {obj=MiniJson.Parse(text) as Dictionary<string,object>;}
+  catch {obj=null;}
+  string tag=obj!=null&&obj.ContainsKey("tag_name")?obj["tag_name"] as string:null;
+  string version=(tag??"").TrimStart('v','V').Trim();
+  if(Parse(version)==null)throw Fail("Antwort unlesbar.",null);
 
   var info=new UpdateInfo{Version=version,Url=ReleasesPage};
   string url=obj.ContainsKey("html_url")?obj["html_url"] as string:null;
@@ -263,13 +302,31 @@ Start-Process -FilePath $Exe -ArgumentList '--nach-update'
  }
 }
 
-enum UpdateKind {Unknown,Current,Available,Failed,Checking}
+enum UpdateKind {Unknown,Current,Available,Failed,Checking,PreRelease}
 
-// Stand der Update-Prüfung für das Info-Fenster
+// Stand der Update-Prüfung für das Info-Fenster: Überschrift, zweite Zeile und
+// technischer Originaltext für "Details" (More, nur bei Fehlern)
 sealed class UpdateStatus {
  public readonly UpdateKind Kind;
- public readonly string Title,Detail;
- public UpdateStatus(UpdateKind kind,string title,string detail){Kind=kind;Title=title;Detail=detail??"";}
+ public readonly string Title,Detail,More;
+ public UpdateStatus(UpdateKind kind,string title,string detail):this(kind,title,detail,null){}
+ public UpdateStatus(UpdateKind kind,string title,string detail,string more){Kind=kind;Title=title;Detail=detail??"";More=more??"";}
+
+ // Stand aus einer Ausnahme der Prüfung: feste Kurzmeldung, Originaltext in den Details
+ public static UpdateStatus FromError(Exception ex) {
+  if(ex is UpdateCheck.PreReleaseOnlyException)
+   return new UpdateStatus(UpdateKind.PreRelease,"Nur Vorabversionen","Noch keine fertige Version.");
+  string shortText=ex.Message??"";
+  string more=ex.Data.Contains("Detail")?ex.Data["Detail"] as string:null;
+  // Unbekannter Fehler: kein eigener Text, nur "Details" mit der Originalmeldung
+  if(more==null&&!IsShort(shortText)){more=shortText;shortText="";}
+  return new UpdateStatus(UpdateKind.Failed,"Prüfung nicht möglich",shortText,more);
+ }
+ static bool IsShort(string t) {
+  foreach(string k in new[]{"Nicht erreichbar.","Keine Verbindung.","Keine Antwort.","Zu viele Anfragen.","Antwort unlesbar."})
+   if(t==k)return true;
+  return false;
+ }
 }
 
 // Verbindung des Info-Fensters zur Update-Prüfung im Hauptfenster
@@ -277,6 +334,8 @@ sealed class UpdateHooks {
  public Func<UpdateStatus> Status;
  public Func<bool> Auto;
  public Action<bool> SetAuto;
+ public Func<bool> AutoInstall;          // "Automatisch aktualisieren"; ohne diese Hooks fehlt die Zeile
+ public Action<bool> SetAutoInstall;
  public Func<Task<UpdateStatus>> CheckNow;
  public Func<bool> CanInstall;
  public Action Install;
@@ -355,23 +414,27 @@ class ToggleSwitch:Control {
  }
  protected override void OnMouseEnter(EventArgs e){base.OnMouseEnter(e);hover=true;Invalidate();}
  protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);hover=false;Invalidate();}
- protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);if(e.Button==MouseButtons.Left)Checked=!Checked;}
+ protected override void OnEnabledChanged(EventArgs e){base.OnEnabledChanged(e);hover=false;Cursor=Enabled?Cursors.Hand:Cursors.Default;Invalidate();}
+ protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);if(e.Button==MouseButtons.Left&&Enabled)Checked=!Checked;}
  protected override void OnPaint(PaintEventArgs e) {
   var g=e.Graphics;
   g.Clear(Parent!=null?Parent.BackColor:Ui.Surface);
   g.SmoothingMode=SmoothingMode.AntiAlias;
   int sw=Ui.Px(36),sh=Ui.Px(18);
   var r=new RectangleF(Width-sw-1.5f,(Height-sh)/2f,sw,sh);
+  // gesperrt: blasser, ohne Hover
+  Color back=Parent!=null?Parent.BackColor:Ui.Surface;
+  Func<Color,Color> dim=c=>Enabled?c:Ui.Blend(back,c,0.4f);
   using(var p=Ui.Round(r,r.Height/2)) {
-   if(on) using(var b=new SolidBrush(hover?Ui.PrimaryHover:Ui.Primary))g.FillPath(b,p);
+   if(on) using(var b=new SolidBrush(dim(hover?Ui.PrimaryHover:Ui.Primary)))g.FillPath(b,p);
    else {
     using(var b=new SolidBrush(hover?Ui.SurfaceHover:Ui.Surface))g.FillPath(b,p);
-    using(var pen=new Pen(Ui.Muted,Math.Max(1f,Ui.S)))g.DrawPath(pen,p);
+    using(var pen=new Pen(dim(Ui.Muted),Math.Max(1f,Ui.S)))g.DrawPath(pen,p);
    }
   }
   float kd=(on?12:10)*Ui.S*(hover?1.1f:1f);
   float kx=on?r.Right-3.5f*Ui.S-kd:r.X+4*Ui.S;
-  using(var b=new SolidBrush(on?Ui.OnPrimary:Ui.Muted))g.FillEllipse(b,kx,r.Y+(r.Height-kd)/2,kd,kd);
+  using(var b=new SolidBrush(on?Ui.OnPrimary:dim(Ui.Muted)))g.FillEllipse(b,kx,r.Y+(r.Height-kd)/2,kd,kd);
  }
 }
 

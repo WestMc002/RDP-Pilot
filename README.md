@@ -52,11 +52,12 @@ The interface is in **German**.
 - **Main monitor** (taskbar and start menu of the remote session) chosen by right-click
 - **Identify:** briefly shows each screen's number on the screen itself
 - **Stays up to date:** detects changed screens (docking, undocking) and new or deleted connections in the folder, and warns when a connection is set to screens that are currently not attached
-- **Connection list** with all `.rdp` files from the program folder, including server and user; other files via file dialog or drag & drop
+- **Connection list** with all `.rdp` files from the program folder, including server and user; other files via file dialog or drag & drop (remembered for the next start, the last selection is restored)
 - **Optional backup** of the original connection as `.rdp.bak`, restorable with one click
 - **Command line** for shortcuts and scripts
 - **Windows 11 design:** light/dark mode and Windows accent color, help texts on mouse-over
-- **Update check:** shows at startup when a newer version is available on GitHub
+- **Connect only:** starts the connection on the monitors currently selected without changing the file
+- **Update check:** at every start; optionally installs new versions automatically ("Update automatically", off by default)
 
 ### Installation
 
@@ -92,11 +93,12 @@ Einmal festlegen, auf welchem Bildschirm – oder auf welchen Bildschirmen – e
 - **Hauptmonitor** (Taskleiste und Startmenü der Sitzung) per Rechtsklick festlegen
 - **Identifizieren:** blendet auf jedem Bildschirm kurz seine Nummer ein
 - **Bleibt aktuell:** erkennt geänderte Bildschirme (an- oder abgedockt) sowie neue oder gelöschte Verbindungen im Ordner und warnt, wenn eine Verbindung auf Bildschirme eingestellt ist, die gerade nicht angeschlossen sind
-- **Verbindungsliste** mit allen `.rdp`-Dateien aus dem Programmordner, jeweils mit Server und Benutzer; weitere Dateien per Dateiauswahl oder Drag & Drop
+- **Verbindungsliste** mit allen `.rdp`-Dateien aus dem Programmordner, jeweils mit Server und Benutzer; weitere Dateien per Dateiauswahl oder Drag & Drop (werden für den nächsten Start gemerkt, die letzte Auswahl ist wieder gewählt)
 - **Optionale Sicherung** der Originalverbindung als `.rdp.bak`, mit einem Klick wiederherstellbar
 - **Kommandozeile** für Verknüpfungen und Skripte
 - **Windows-11-Design:** heller/dunkler Modus und Windows-Akzentfarbe, Hilfetexte bei Mouseover
-- **Update-Prüfung:** zeigt beim Start, wenn auf GitHub eine neuere Version bereitsteht
+- **Nur verbinden:** startet die Verbindung auf den gerade ausgewählten Monitoren, ohne die Datei zu ändern
+- **Update-Prüfung:** bei jedem Start; auf Wunsch werden neue Versionen automatisch installiert („Automatisch aktualisieren“, Standard aus)
 
 ### Installation
 

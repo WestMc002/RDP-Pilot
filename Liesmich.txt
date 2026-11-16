@@ -26,14 +26,19 @@ Bedienung
 Die EXE liest alle .rdp-Dateien aus ihrem eigenen Ordner ein.
 Verbindung oben auswählen, Monitore in der Karte anklicken (mehrere möglich),
 dann "Speichern & verbinden" oder "Speichern".
-Weitere Dateien über "Andere Datei …" oder per Drag & Drop aufs Fenster.
+Weitere Dateien über "Andere Datei …" oder per Drag & Drop aufs Fenster. Sie werden
+gemerkt und stehen beim nächsten Start wieder in der Liste; die zuletzt gewählte
+Verbindung ist dann gleich ausgewählt.
 Neue oder gelöschte .rdp-Dateien im Ordner erscheinen von selbst in der Liste;
 F5 liest Ordner und Bildschirme von Hand neu ein.
 "Identifizieren" blendet auf jedem Bildschirm kurz groß seine Nummer ein.
 Ändern sich die Bildschirme, während das Programm läuft (z.B. Notebook an- oder
 abgedockt), liest es sie neu ein. Ist eine Verbindung auf Bildschirme eingestellt,
-die gerade nicht angeschlossen sind, warnt die Infozeile; "Nur verbinden" fragt
-dann vorher nach.
+die gerade nicht angeschlossen sind, warnt die Infozeile.
+"Nur verbinden" verbindet auf den Monitoren, die gerade ausgewählt sind, ohne die
+Verbindung zu ändern (dafür wird eine Kopie im Temp-Ordner gestartet). Ist nichts
+geändert, wird die Verbindung direkt gestartet; fehlen dann gespeicherte
+Bildschirme, fragt das Programm vorher nach.
 Option "Sicherung erstellen" (standardmäßig aus): beim Speichern wird das
 Original als <Datei>.rdp.bak gesichert, sofern noch keine Sicherung existiert.
 "Original wiederherstellen" spielt sie zurück.
@@ -63,18 +68,33 @@ Klick auf die Versionsnummer oben öffnet das Info-Fenster mit Version,
 Eckdaten, Anleitung und dem Ordner der Verbindungen.
 
 Update-Prüfung
-Kurz nach dem Start fragt das Programm still auf GitHub nach, ob es eine neuere
-Version gibt (github.com/WestMc002/reitzner-RDP-Pilot, nur lesend, ohne Anmeldung,
-höchstens alle 20 Stunden). Gibt es eine, erscheint oben im Fenster ein Hinweis
-mit "Jetzt aktualisieren", "Release-Seite" und "Später".
-"Jetzt aktualisieren" lädt das ZIP, beendet das Programm, ersetzt EXE und
-Liesmich (mit Sicherung) und startet neu; die Verbindungen bleiben unverändert.
+Kurz nach jedem Start wird still auf GitHub geprüft, ob es eine neuere Version
+gibt (github.com/WestMc002/reitzner-RDP-Pilot, nur lesend, ohne Anmeldung). Gibt es
+eine, erscheint oben im Fenster ein Hinweis mit "Jetzt aktualisieren",
+"Release-Seite" und "Später". "Jetzt aktualisieren" lädt das ZIP, beendet das
+Programm, ersetzt EXE und Liesmich (mit Sicherung) und startet neu; die
+Verbindungen bleiben unverändert.
 Im Info-Fenster zeigt die Zeile "Updates" den Stand und die letzte Prüfung,
 "Jetzt prüfen" prüft von Hand, "Automatisch prüfen" schaltet die Prüfung ab.
+Bei einem Fehler steht dort eine kurze Meldung, die genaue Ursache unter "Details".
+Automatisch aktualisieren (Standard aus, nur zusammen mit "Automatisch prüfen"):
+eine neue Version wird ohne Rückfrage installiert, sobald das Programm nicht
+beschäftigt ist (keine ungespeicherte Monitorauswahl, kein Dialog offen; sonst
+wird alle 5 Minuten erneut versucht). Danach startet das Programm von selbst neu.
+Liegt das Programm unter "Programme", fragt Windows bei jedem Update nach
+Administratorrechten.
 Gespeichert wird das unter %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.43  Update-Prüfung bei jedem Start; neu: "Automatisch aktualisieren" im Info-Fenster
+      (installiert neue Versionen ohne Rückfrage, Standard aus)
+      Info-Fenster: Update-Zeile übersichtlicher; bei einem Fehler kurze Meldung,
+      die genaue Ursache über "Details"
+      "Nur verbinden" nutzt die Monitore, die gerade ausgewählt sind (vorher die
+      zuletzt gespeicherten)
+      Verbindungen aus anderen Ordnern ("Andere Datei …") werden gemerkt, die zuletzt
+      gewählte Verbindung ist beim Start wieder ausgewählt
 1.39  Verbindungsliste klappt am unteren Bildschirmrand nach oben auf und bleibt
       auf dem Bildschirm des Fensters
 1.38  Verbindungsliste: gleicher Abstand zum Rahmen oben und unten
