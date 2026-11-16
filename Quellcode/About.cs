@@ -165,8 +165,8 @@ public class AboutDialog:Form {
    TextAlign=ContentAlignment.MiddleLeft,Font=titleFont,Location=new Point(tx,uy+Ui.Px(2))};
   var detail=new Label{ForeColor=Ui.Muted,BackColor=Ui.Surface,AutoSize=false,AutoEllipsis=true,UseMnemonic=false,
    TextAlign=ContentAlignment.TopLeft,Font=smallFont,Location=new Point(tx,uy+Ui.Px(23)),Padding=Padding.Empty};
-  var more=new Label{Text="Details",ForeColor=Ui.Accent,BackColor=Ui.Surface,AutoSize=true,UseMnemonic=false,Font=smallFont,
-   Cursor=Cursors.Hand,Visible=false,Padding=Padding.Empty,Margin=Padding.Empty};
+  var more=new Label{Text="Details",ForeColor=Ui.Accent,BackColor=Ui.Surface,AutoSize=false,UseMnemonic=false,Font=smallFont,
+   TextAlign=ContentAlignment.TopLeft,Cursor=Cursors.Hand,Visible=false,Padding=Padding.Empty,Margin=Padding.Empty};
   // Grau hinterlegtes Feld mit dem technischen Originaltext (markier- und kopierbar)
   var box=new Panel{BackColor=Ui.Bg,Visible=false,Padding=new Padding(Ui.Px(8),Ui.Px(6),Ui.Px(8),Ui.Px(6))};
   var boxText=new TextBox{Multiline=true,ReadOnly=true,WordWrap=true,BorderStyle=BorderStyle.None,BackColor=Ui.Bg,ForeColor=Ui.TextColor,
@@ -223,20 +223,21 @@ public class AboutDialog:Form {
    var shown=install.Visible?install:page.Visible?page:check;
    int avail=Math.Max(Ui.Px(40),shown.Left-Ui.Px(6)-tx);
    title.Size=new Size(Math.Max(Ui.Px(40),shown.Left-Ui.Px(12)-tx),Ui.Px(22));
-   // zweite Zeile endet vor dem Knopf; "Details" etwa ein Leerzeichen hinter dem Text
-   int linkW=more.Visible?more.PreferredWidth:0;
-   int textW=String.IsNullOrEmpty(detail.Text)?0:TextRenderer.MeasureText(detail.Text,smallFont,Size.Empty,flags).Width; // NoPadding
-   int cap=Math.Max(0,avail-(more.Visible?linkW+Ui.Px(4):0));
-   int shownW=Math.Min(textW,Math.Max(0,cap-Ui.Px(6)));             // gezeigte Textbreite, sonst mit "…" gekürzt
-   detail.Size=new Size(textW>0?shownW+Ui.Px(6):0,Ui.Px(20));
+   // zweite Zeile endet vor dem Knopf; Breiten mit NoPadding in der Schrift der zweiten Zeile gemessen
+   // (wie Wake on LAN, ModernUi.cs AddUpdateRows)
+   int linkW=more.Visible?TextRenderer.MeasureText(more.Text,smallFont,Size.Empty,flags).Width+Ui.Px(2):0;
+   int textW=String.IsNullOrEmpty(detail.Text)?0:TextRenderer.MeasureText(detail.Text,smallFont,Size.Empty,flags).Width;
+   int room=(more.Visible?avail-linkW-Ui.Px(3):avail)-Ui.Px(8);
+   if(textW>room)textW=Math.Max(0,room);                             // zu lang: mit "…" kürzen, ganzer Text im Tooltip
+   // Label zeichnet mit kleinem Innenabstand: Breite = Text (NoPadding) + Reserve
+   detail.SetBounds(tx,uy+Ui.Px(23),Math.Max(1,textW+Ui.Px(8)),Ui.Px(20));
    detail.SendToBack();
-   detail.Visible=textW>0;
-   // "Details" etwa ein Leerzeichen hinter dem Text (Vorgabe: Textanfang + Breite(NoPadding) − 3).
-   // Beide Labels zeichnen mit demselben Textrand, deshalb genügt: Textende + Breite eines Leerzeichens.
-   // Ohne Text bündig unter der Überschrift.
+   detail.Visible=!String.IsNullOrEmpty(detail.Text);
+   // "Details" etwa ein Leerzeichen hinter dem Text: Textanfang + gemessene Breite + S(3);
+   // ohne Text bündig unter der Überschrift
    if(more.Visible) {
-    int space=TextRenderer.MeasureText("x x",smallFont,Size.Empty,flags).Width-TextRenderer.MeasureText("xx",smallFont,Size.Empty,flags).Width;
-    more.Location=new Point(textW>0?tx+shownW+space:tx,uy+Ui.Px(23));
+    int mx=String.IsNullOrEmpty(detail.Text)?tx:tx+textW+Ui.Px(3);
+    more.SetBounds(mx,uy+Ui.Px(23),linkW,Ui.Px(20));
     more.BringToFront();
    }
    // aufgeklapptes Feld von x0 bis zum rechten Rand der Werte, Oberkante uy + 46

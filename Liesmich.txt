@@ -87,6 +87,8 @@ Gespeichert wird das unter %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.44  Info-Fenster: "Details" steht wie in den anderen Programmen direkt hinter der
+      Kurzmeldung
 1.43  Update-Prüfung bei jedem Start; neu: "Automatisch aktualisieren" im Info-Fenster
       (installiert neue Versionen ohne Rückfrage, Standard aus)
       Info-Fenster: Update-Zeile übersichtlicher; bei einem Fehler kurze Meldung,
