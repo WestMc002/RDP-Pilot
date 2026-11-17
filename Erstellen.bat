@@ -1,12 +1,12 @@
 @ECHO OFF
 SETLOCAL EnableExtensions
 ECHO #######################################
-ECHO #  reitzner RDP Pilot erstellen       #
+ECHO #  RDP Pilot erstellen                #
 ECHO #                                     #
 ECHO #  Autor: Guenther Schoder            #
 ECHO #         www.westmc002.de            #
 ECHO #                                     #
-ECHO #  Datum: 29.10.2026 / 30.10.2026     #
+ECHO #  Datum: 29.10.2026 / 17.11.2026     #
 ECHO #######################################
 ECHO.
 
@@ -18,12 +18,12 @@ REM MAJOR     = Hauptversion
 REM NAME      = Programmname = Name der EXE ohne .exe (auch Prozessname und Backup-Ordner)
 REM NAMESPACE = C#-Namespace, in dem die Klasse AppInfo liegt
 REM SRCDIR    = Ordner mit allen .cs-Dateien (VersionInfo.cs wird dort erzeugt)
-REM RESDIR    = Ordner mit Icon und Logo (reitzner-Projekt: Logo-hell.png und Logo-dunkel.png statt GS-Logo.png)
+REM RESDIR    = Ordner mit Icon und GS-Logo.png
 REM ICON      = Dateiname des Programm-Icons (.ico) im Ordner RESDIR
 REM EXTRAREFS = zusaetzliche Verweise (z. B. /r:System.Web.Extensions.dll), sonst leer lassen
 REM             hier: zusaetzlich eingebettetes App-Icon fuer den Kopfbereich
 SET "MAJOR=1"
-SET "NAME=reitzner RDP Pilot"
+SET "NAME=RDP Pilot"
 SET "NAMESPACE=RDPilot"
 SET "SRCDIR=Quellcode"
 SET "RESDIR=Resources"
@@ -65,7 +65,7 @@ REM Versionsdatei fuer den Compiler erzeugen
 REM Kompilieren (zuerst in eine neue Datei, die alte EXE bleibt bei Fehlern erhalten)
 IF EXIST "%NEWEXE%" DEL /F /Q "%NEWEXE%"
 ECHO Kompiliere %EXE% ...
-"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 "/out:%NEWEXE%" "/win32icon:%RESDIR%\%ICON%" "/resource:%RESDIR%\%ICON%,%ICON%" "/resource:%RESDIR%\Logo-hell.png,Logo-hell.png" "/resource:%RESDIR%\Logo-dunkel.png,Logo-dunkel.png" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll %EXTRAREFS% "%SRCDIR%\*.cs" > Erstellen.log 2>&1
+"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 "/out:%NEWEXE%" "/win32icon:%RESDIR%\%ICON%" "/resource:%RESDIR%\%ICON%,%ICON%" "/resource:%RESDIR%\GS-Logo.png,GS-Logo.png" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll %EXTRAREFS% "%SRCDIR%\*.cs" > Erstellen.log 2>&1
 SET "RESULT=%ERRORLEVEL%"
 TYPE Erstellen.log
 IF NOT "%RESULT%"=="0" GOTO :ERR_BUILD

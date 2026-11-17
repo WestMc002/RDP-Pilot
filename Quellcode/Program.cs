@@ -1,4 +1,4 @@
-﻿// reitzner RDP Pilot – RDP-Sitzungen auf den richtigen Monitor lenken
+﻿// RDP Pilot – RDP-Sitzungen auf den richtigen Monitor lenken
 // Copyright (C) 2026 Günther Schoder · https://www.westmc002.de
 // Lizenz: GNU General Public License v3.0 oder später (siehe LICENSE)
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -18,19 +18,19 @@ namespace RDPilot {
 
 public static partial class AppInfo {
  public const string Product="RDP Pilot";
- public const string FullName="reitzner RDP Pilot";
- // reitzner-Projekt: in der Oberfläche weder Name noch Website des Entwicklers (Globale Richtlinien)
- public const string Company="reitzner AG";
+ public const string FullName="RDP Pilot";
+ public const string Author="Günther Schoder";
+ public const string Website="www.westmc002.de";
 }
 
 static class Program {
  // Aufruf:
- //   "reitzner RDP Pilot.exe"                          -> Oberfläche
- //   "reitzner RDP Pilot.exe" Test.rdp                 -> Oberfläche mit vorausgewählter Datei
- //   "reitzner RDP Pilot.exe" Test.rdp 2,1             -> Monitore setzen (erster = Hauptmonitor), ohne Oberfläche
- //   "reitzner RDP Pilot.exe" Test.rdp 1,2 /connect    -> setzen und Verbindung starten
+ //   "RDP Pilot.exe"                             -> Oberfläche
+ //   "RDP Pilot.exe"    Test.rdp                 -> Oberfläche mit vorausgewählter Datei
+ //   "RDP Pilot.exe"    Test.rdp 2,1             -> Monitore setzen (erster = Hauptmonitor), ohne Oberfläche
+ //   "RDP Pilot.exe"    Test.rdp 1,2 /connect    -> setzen und Verbindung starten
  //   zusätzlich /backup                                  -> vorher Sicherung .rdp.bak anlegen
- //   "reitzner RDP Pilot.exe" --screenshots [Ordner]   -> Screenshots für GitHub aus Beispieldaten (Standard: Screenshots)
+ //   "RDP Pilot.exe"    --screenshots [Ordner]   -> Screenshots für GitHub aus Beispieldaten (Standard: Screenshots)
  [STAThread] static int Main(string[] args) {
   Native.EnableDpiAwareness();
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);

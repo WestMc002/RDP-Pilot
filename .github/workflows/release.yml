@@ -1,7 +1,7 @@
-# reitzner RDP Pilot - automatische Bereitstellung als Download (Release)
+# RDP Pilot - automatische Bereitstellung als Download (Release)
 # Ausloeser: Aenderung dieser Datei auf main oder per Hand ueber "Run workflow"
 # mit Versionsangabe. Die Version kommt sonst aus dem neuesten Commit
-# "reitzner RDP Pilot <Version> - Aenderungen".
+# "RDP Pilot <Version> - Aenderungen".
 # Gibt es das Release zur Version noch nicht, wird gebaut und das Release mit
 # dem ZIP angelegt. Gibt es es schon, wird nur der Release-Text aufgefrischt.
 # Release-Text: oben "Aenderungen" (Zeilen mit "- " aus dem neuesten Commit,
@@ -41,7 +41,7 @@ jobs:
           if(-not $ver) {
             $subjects = git log --format=%s
             foreach($s in $subjects) {
-              if($s -match '^reitzner RDP Pilot v?(\d+\.\d+\.\d+\.\d+)') { $ver = $Matches[1]; break }
+              if($s -match '^RDP Pilot v?(\d+\.\d+\.\d+\.\d+)') { $ver = $Matches[1]; break }
             }
           }
           if($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "ungueltige oder fehlende Version: $ver" }
@@ -64,7 +64,7 @@ jobs:
             $items = @($msg | Where-Object { $_ -match '^\s*[-*]\s+\S' } | ForEach-Object { "- " + ($_ -replace '^\s*[-*]\s+','') })
           }
           if($items.Count -eq 0) { throw "Kein Commit mit Versionsnummer $ver und Aenderungspunkten gefunden" }
-          $zip = "reitzner-RDP-Pilot-$ver.zip"
+          $zip = "RDP-Pilot-$ver.zip"
           $lines = @()
           $lines += "## Änderungen"
           $lines += ""
@@ -73,7 +73,7 @@ jobs:
           $lines += "## Installation"
           $lines += ""
           $lines += "1. ``$zip`` herunterladen und in einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (.rdp-Dateien) liegen. Eine Installation ist nicht nötig."
-          $lines += "2. ``reitzner RDP Pilot.exe`` per Doppelklick starten. Das Programm zeigt alle .rdp-Dateien aus seinem Ordner an."
+          $lines += "2. ``RDP Pilot.exe`` per Doppelklick starten. Das Programm zeigt alle .rdp-Dateien aus seinem Ordner an."
           # Typografische Anführungszeichen nur in '...' - PowerShell wertet sie in "..." als Stringende
           $lines += '3. Verbindung auswählen, die gewünschten Monitore anklicken (Hauptmonitor per Rechtsklick) und „Speichern & verbinden“ wählen.'
           $lines += ""
@@ -98,23 +98,23 @@ jobs:
           ) | Set-Content Quellcode\VersionInfo.cs -Encoding utf8
           New-Item -ItemType Directory -Force Bin | Out-Null
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          & $csc /nologo /target:winexe /optimize+ /codepage:65001 "/out:Bin\reitzner RDP Pilot.exe" `
+          & $csc /nologo /target:winexe /optimize+ /codepage:65001 "/out:Bin\RDP Pilot.exe" `
             "/win32icon:Resources\RDPilot.ico" "/resource:Resources\RDPilot.ico,RDPilot.ico" `
-            "/resource:Resources\Logo-hell.png,Logo-hell.png" "/resource:Resources\Logo-dunkel.png,Logo-dunkel.png" `
+            "/resource:Resources\GS-Logo.png,GS-Logo.png" `
             "/resource:Resources\AppIcon.png,AppIcon.png" `
             /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll Quellcode\*.cs
           if($LASTEXITCODE -ne 0) { throw 'Kompilieren fehlgeschlagen' }
-          (Get-Item "Bin\reitzner RDP Pilot.exe").VersionInfo.FileVersion
+          (Get-Item "Bin\RDP Pilot.exe").VersionInfo.FileVersion
 
       - name: Release anlegen
         if: steps.ver.outputs.exists == '0'
         shell: pwsh
         run: |
           $ver = '${{ steps.ver.outputs.ver }}'
-          $zip = "Bin\reitzner-RDP-Pilot-$ver.zip"
+          $zip = "Bin\RDP-Pilot-$ver.zip"
           Copy-Item Liesmich.txt Bin\
-          Compress-Archive -Path "Bin\reitzner RDP Pilot.exe","Bin\Liesmich.txt" -DestinationPath $zip -Force
-          gh release create "v$ver" $zip --title "reitzner RDP Pilot $ver" --notes-file notes.md --target $env:GITHUB_SHA
+          Compress-Archive -Path "Bin\RDP Pilot.exe","Bin\Liesmich.txt" -DestinationPath $zip -Force
+          gh release create "v$ver" $zip --title "RDP Pilot $ver" --notes-file notes.md --target $env:GITHUB_SHA
 
       - name: Release-Text auffrischen
         if: steps.ver.outputs.exists == '1'

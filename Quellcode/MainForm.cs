@@ -1,4 +1,4 @@
-﻿// reitzner RDP Pilot – RDP-Sitzungen auf den richtigen Monitor lenken
+﻿// RDP Pilot – RDP-Sitzungen auf den richtigen Monitor lenken
 // Copyright (C) 2026 Günther Schoder · https://www.westmc002.de
 // Lizenz: GNU General Public License v3.0 oder später (siehe LICENSE)
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -17,9 +17,12 @@ using System.Windows.Forms;
 
 namespace RDPilot {
 
-// Fußzeile mit Ordnerhinweis links und dezentem Firmenlogo rechts
+// Fußzeile: links grau "© <Jahr> · <Programm>", rechts klein und grau "www.westmc002.de" (anklickbar).
+// Abweichung von den Globalen Richtlinien: kein GS-Logo und kein Name (das GS-Logo steht im Info-Fenster)
 public class FooterPanel:Panel {
- public Bitmap LogoLight,LogoDark;
+ const string Url="https://www.westmc002.de";
+ Rectangle link;
+ bool hover;
  public FooterPanel() {
   SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
   BackColor=Ui.Bg;
@@ -28,23 +31,29 @@ public class FooterPanel:Panel {
  protected override void OnPaint(PaintEventArgs e) {
   var g=e.Graphics;
   g.Clear(BackColor);
-  int right=Width;
-  Bitmap logo=Ui.Dark?LogoDark:LogoLight;
-  if(logo!=null) {
-   int h=Ui.Px(30);
-   int w=(int)Math.Round(logo.Width*(double)h/logo.Height);
-   var dest=new Rectangle(Width-w,(Height-h)/2,w,h);
-   g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.PixelOffsetMode=PixelOffsetMode.HighQuality;
-   using(var attributes=new System.Drawing.Imaging.ImageAttributes()) {
-    var matrix=new System.Drawing.Imaging.ColorMatrix();
-    matrix.Matrix33=Ui.Dark?0.8f:0.9f;
-    attributes.SetColorMatrix(matrix);
-    g.DrawImage(logo,dest,0,0,logo.Width,logo.Height,GraphicsUnit.Pixel,attributes);
-   }
-   right=dest.X-Ui.Px(16);
+  var flags=TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix|TextFormatFlags.NoPadding;
+  var size=TextRenderer.MeasureText(g,AppInfo.Website,Ui.SmallFont,Size.Empty,flags);
+  // Links und rechts gleich weit von der Kante: "©" bringt links etwa 1 × Skalierung Rand mit,
+  // deshalb rechts um 1 × Skalierung einrücken
+  link=new Rectangle(Width-Ui.Px(1)-size.Width,(Height-size.Height)/2,size.Width,size.Height);
+  TextRenderer.DrawText(g,AppInfo.Website,Ui.SmallFont,link.Location,hover?Ui.Accent:Ui.Muted,flags);
+  TextRenderer.DrawText(g,Text,Ui.SmallFont,new Rectangle(0,0,Math.Max(0,link.X-Ui.Px(18)),Height),Ui.Muted,
+   flags|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
+ }
+ protected override void OnMouseMove(MouseEventArgs e) {
+  bool h=link.Contains(e.Location);
+  if(h!=hover){hover=h;Cursor=h?Cursors.Hand:Cursors.Default;Invalidate();}
+  base.OnMouseMove(e);
+ }
+ protected override void OnMouseLeave(EventArgs e) {
+  if(hover){hover=false;Cursor=Cursors.Default;Invalidate();}
+  base.OnMouseLeave(e);
+ }
+ protected override void OnMouseClick(MouseEventArgs e) {
+  if(e.Button==MouseButtons.Left&&link.Contains(e.Location)) {
+   try {Process.Start(new ProcessStartInfo(Url){UseShellExecute=true});} catch {}
   }
-  var flags=TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix|TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis;
-  TextRenderer.DrawText(g,Text,Ui.SmallFont,new Rectangle(Ui.Px(2),0,Math.Max(0,right-Ui.Px(2)),Height),Ui.Muted,flags);
+  base.OnMouseClick(e);
  }
 }
 
@@ -149,8 +158,6 @@ public class MainForm:Form {
   info.Dock=DockStyle.Fill;info.Margin=new Padding(0,0,0,Ui.Px(10));
 
   footer=new FooterPanel{Dock=DockStyle.Fill,Margin=new Padding(0)};
-  footer.LogoLight=LoadBitmap("Logo-hell.png");
-  footer.LogoDark=LoadBitmap("Logo-dunkel.png");
   footer.Text="© "+DateTime.Now.Year+" · "+AppInfo.FullName;
   header.BadgeClick+=(s,e)=>AboutDialog.ShowFor(this,folder);
 
@@ -381,7 +388,7 @@ public class MainForm:Form {
  }
 
  // "Nur verbinden": verbindet mit der Auswahl, die gerade im Fenster zu sehen ist, ohne die Datei zu ändern.
- // Weicht sie von der gespeicherten ab, startet mstsc mit einer Kopie unter %TEMP%\reitzner RDP Pilot,
+ // Weicht sie von der gespeicherten ab, startet mstsc mit einer Kopie unter %TEMP%\RDP Pilot,
  // in die die Auswahl geschrieben wird. Sonst wird die Datei direkt gestartet (vorher Prüfung, ob die
  // gespeicherten Bildschirme gerade angeschlossen sind).
  void StartOnly() {

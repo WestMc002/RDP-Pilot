@@ -1,4 +1,4 @@
-﻿// reitzner RDP Pilot – Screenshots mit Beispieldaten (hell und dunkel) für GitHub
+﻿// RDP Pilot – Screenshots mit Beispieldaten (hell und dunkel) für GitHub
 // Copyright (C) 2026 Günther Schoder · https://www.westmc002.de
 // Lizenz: GNU General Public License v3.0 oder später (siehe LICENSE)
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -17,7 +17,7 @@ using System.Windows.Forms;
 namespace RDPilot {
 
 // Erzeugt die Screenshots für die README aus Beispieldaten.
-// Aufruf: "reitzner RDP Pilot.exe" --screenshots [Zielordner] (Standard: Ordner "Screenshots" neben der EXE).
+// Aufruf: "RDP Pilot.exe" --screenshots [Zielordner] (Standard: Ordner "Screenshots" neben der EXE).
 // Echte Verbindungen und die echte Monitoranordnung werden nicht verwendet und nicht verändert:
 // Die Verbindungen liegen in einem Temp-Ordner, die Monitore sind fest vorgegeben (drei Monitore, Mitte primär).
 // Ablage: hell.png / dunkel.png (Hauptfenster), liste-hell.png / liste-dunkel.png (aufgeklappte Verbindungsliste),
@@ -27,7 +27,7 @@ namespace RDPilot {
 static class Demo {
  // true, solange die Screenshots erstellt werden (z. B. Programmpfad im Info-Fenster neutral anzeigen)
  public static bool Active;
- public const string DemoProgramFolder=@"C:\Tools\reitzner RDP Pilot";
+ public const string DemoProgramFolder=@"C:\Tools\RDP Pilot";
 
  [StructLayout(LayoutKind.Sequential)] struct RECT {public int Left,Top,Right,Bottom;}
  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd,int attr,out RECT value,int size);

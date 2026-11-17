@@ -1,4 +1,4 @@
-﻿reitzner RDP Pilot
+﻿RDP Pilot
 =================
 Legt in .rdp-Dateien fest, auf welchem Monitor bzw. welchen Monitoren
 eine Remotedesktop-Sitzung startet.
@@ -13,12 +13,12 @@ Nach dem Erstellen werden Vorschaubilder im Ordner Design\Vorschau erzeugt.
 Auf Nachfrage (J, ohne Antwort nach 10 Sekunden Nein) erstellt sie außerdem die
 Screenshots für GitHub im Ordner Screenshots – nur aus Beispieldaten
 (erfundene Verbindungen und drei feste Beispielmonitore), hell und dunkel.
-Direkt: "reitzner RDP Pilot.exe" --screenshots [Zielordner]
+Direkt: "RDP Pilot.exe" --screenshots [Zielordner]
 
 Backup
 Nach jedem erfolgreichen Erstellen wird das gesamte Projekt (EXE, Quellcode,
 Resources, Design, Anleitungen usw.) in einen eigenen Versionsordner kopiert:
-Backup\reitzner RDP Pilot v<Version>
+Backup\RDP Pilot v<Version>
 Ordnernamen im Projekt werden groß geschrieben (Backup, Design, Quellcode, Resources).
 Erstellen.bat folgt der Standard-Vorlage (Globale Richtlinien).
 
@@ -56,12 +56,12 @@ Ohne Festlegung: lokaler Primärmonitor, falls ausgewählt, sonst der linke.
 "Primär" kennzeichnet den Hauptbildschirm deines lokalen Windows.
 
 Kommandozeile
-"reitzner RDP Pilot.exe" Test.rdp 2,1            Monitore setzen (erster = Hauptmonitor)
-"reitzner RDP Pilot.exe" Test.rdp 2,1 /connect   setzen und verbinden
+"RDP Pilot.exe" Test.rdp 2,1            Monitore setzen (erster = Hauptmonitor)
+"RDP Pilot.exe" Test.rdp 2,1 /connect   setzen und verbinden
 Zusätzlich /backup: vorher Sicherung .rdp.bak anlegen
 
-Quellcode: Quellcode\*.cs   Grafiken: Resources (Icon, App-Icon, reitzner-Logo hell/dunkel)
-Entwürfe: Design (Vorschaubilder, Original des reitzner-Logos)
+Quellcode: Quellcode\*.cs   Grafiken: Resources (Icon, App-Icon, GS-Logo)
+Entwürfe: Design (Vorschaubilder)
 
 Info-Fenster
 Klick auf die Versionsnummer oben öffnet das Info-Fenster mit Version,
@@ -69,7 +69,7 @@ Eckdaten, Anleitung und dem Ordner der Verbindungen.
 
 Update-Prüfung
 Kurz nach jedem Start wird still auf GitHub geprüft, ob es eine neuere Version
-gibt (github.com/WestMc002/reitzner-RDP-Pilot, nur lesend, ohne Anmeldung). Gibt es
+gibt (github.com/WestMc002/RDP-Pilot, nur lesend, ohne Anmeldung). Gibt es
 eine, erscheint oben im Fenster ein Hinweis mit "Jetzt aktualisieren",
 "Release-Seite" und "Später". "Jetzt aktualisieren" lädt das ZIP, beendet das
 Programm, ersetzt EXE und Liesmich (mit Sicherung) und startet neu; die
@@ -83,10 +83,15 @@ beschäftigt ist (keine ungespeicherte Monitorauswahl, kein Dialog offen; sonst
 wird alle 5 Minuten erneut versucht). Danach startet das Programm von selbst neu.
 Liegt das Programm unter "Programme", fragt Windows bei jedem Update nach
 Administratorrechten.
-Gespeichert wird das unter %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini.
+Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.49  Programm heißt jetzt "RDP Pilot"; Info-Fenster im Design der anderen
+      Programme (GS-Logo), Fußzeile mit Copyright und Website.
+      Einstellungen werden übernommen.
+      Ältere Versionen aktualisieren nicht selbst auf 1.49: ZIP von GitHub laden,
+      "RDP Pilot.exe" an die Stelle der alten EXE setzen.
 1.44  Info-Fenster: "Details" steht wie in den anderen Programmen direkt hinter der
       Kurzmeldung
 1.43  Update-Prüfung bei jedem Start; neu: "Automatisch aktualisieren" im Info-Fenster
@@ -119,6 +124,4 @@ Versionen
 
 Lizenz
 GNU General Public License v3.0 oder später (siehe LICENSE).
-Ausgenommen ist das reitzner-Logo (Resources\Logo-hell.png, Logo-dunkel.png):
-Marke der reitzner AG, alle Rechte vorbehalten.
 © 2026 Günther Schoder

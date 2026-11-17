@@ -1,4 +1,4 @@
-# reitzner RDP Pilot
+# RDP Pilot
 
 **[English](#english) · [Deutsch](#deutsch)**
 
@@ -61,18 +61,18 @@ The interface is in **German**.
 
 ### Installation
 
-1. Download `reitzner-RDP-Pilot-<version>.zip` from the [Releases](https://github.com/WestMc002/reitzner-RDP-Pilot/releases).
+1. Download `RDP-Pilot-<version>.zip` from the [Releases](https://github.com/WestMc002/RDP-Pilot/releases).
 2. Unzip it into a folder of its own with write access, ideally the folder that contains your connections (`.rdp` files).
-3. Double-click `reitzner RDP Pilot.exe` to start. No installation needed.
+3. Double-click `RDP Pilot.exe` to start. No installation needed.
 
 Requirements: Windows 10 or 11 with .NET Framework 4.x.
 
 ### Command line
 
 ```
-"reitzner RDP Pilot.exe" Test.rdp 2              only monitor 2
-"reitzner RDP Pilot.exe" Test.rdp 2,1            monitors 1 + 2, main monitor 2
-"reitzner RDP Pilot.exe" Test.rdp 2,1 /connect   set and connect
+"RDP Pilot.exe" Test.rdp 2              only monitor 2
+"RDP Pilot.exe" Test.rdp 2,1            monitors 1 + 2, main monitor 2
+"RDP Pilot.exe" Test.rdp 2,1 /connect   set and connect
 add /backup to save the original as .rdp.bak first
 ```
 
@@ -102,18 +102,18 @@ Einmal festlegen, auf welchem Bildschirm – oder auf welchen Bildschirmen – e
 
 ### Installation
 
-1. `reitzner-RDP-Pilot-<Version>.zip` aus den [Releases](https://github.com/WestMc002/reitzner-RDP-Pilot/releases) herunterladen.
+1. `RDP-Pilot-<Version>.zip` aus den [Releases](https://github.com/WestMc002/RDP-Pilot/releases) herunterladen.
 2. In einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (`.rdp`-Dateien) liegen.
-3. `reitzner RDP Pilot.exe` per Doppelklick starten. Eine Installation ist nicht nötig.
+3. `RDP Pilot.exe` per Doppelklick starten. Eine Installation ist nicht nötig.
 
 Voraussetzungen: Windows 10 oder 11 mit .NET Framework 4.x.
 
 ### Kommandozeile
 
 ```
-"reitzner RDP Pilot.exe" Test.rdp 2              nur Monitor 2
-"reitzner RDP Pilot.exe" Test.rdp 2,1            Monitor 1 + 2, Hauptmonitor 2
-"reitzner RDP Pilot.exe" Test.rdp 2,1 /connect   setzen und verbinden
+"RDP Pilot.exe" Test.rdp 2              nur Monitor 2
+"RDP Pilot.exe" Test.rdp 2,1            Monitor 1 + 2, Hauptmonitor 2
+"RDP Pilot.exe" Test.rdp 2,1 /connect   setzen und verbinden
 zusätzlich /backup: vorher Sicherung .rdp.bak anlegen
 ```
 
@@ -138,7 +138,5 @@ zusätzlich /backup: vorher Sicherung .rdp.bak anlegen
 GNU General Public License v3.0 or later · GNU General Public License v3.0 oder später – [LICENSE](LICENSE).
 
 © 2026 Günther Schoder
-
-**Exception / Ausnahme:** The reitzner logo (`Resources/Logo-hell.png`, `Resources/Logo-dunkel.png`) is a trademark of reitzner AG and excluded from the GPL. All rights reserved; it may only be redistributed unchanged together with this program. · Das reitzner-Logo (`Resources/Logo-hell.png`, `Resources/Logo-dunkel.png`) ist eine Marke der reitzner AG und von der GPL ausgenommen. Alle Rechte vorbehalten; es darf nur zusammen mit diesem Programm in unveränderter Form weitergegeben werden.
 
 Remote Desktop and Windows are trademarks of Microsoft Corporation. This project is not affiliated with or endorsed by Microsoft. · Remotedesktop und Windows sind Marken der Microsoft Corporation. Dieses Projekt ist nicht mit Microsoft verbunden und wird nicht von Microsoft unterstützt.

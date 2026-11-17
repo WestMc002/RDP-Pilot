@@ -1,4 +1,4 @@
-﻿// reitzner RDP Pilot – RDP-Sitzungen auf den richtigen Monitor lenken
+﻿// RDP Pilot – RDP-Sitzungen auf den richtigen Monitor lenken
 // Copyright (C) 2026 Günther Schoder · https://www.westmc002.de
 // Lizenz: GNU General Public License v3.0 oder später (siehe LICENSE)
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -11,7 +11,7 @@ using System.Windows.Forms;
 
 namespace RDPilot {
 
-// Info-Fenster nach Vorlage Monitor Dimmer: großes reitzner-Logo, Name, Version, Eckdaten, Knöpfe.
+// Info-Fenster nach Vorlage Monitor Dimmer: großes GS-Logo, Name, Version, Eckdaten, Knöpfe.
 // Öffnet sich beim Klick auf die Versionsnummer im Kopfbereich.
 public class AboutDialog:Form {
  static AboutDialog open;
@@ -32,10 +32,16 @@ public class AboutDialog:Form {
   }
  }
 
- // reitzner-Projekt: statt des GS-Logos das reitzner-Logo (Globale Richtlinien),
- // passend zum hellen bzw. dunklen Design; Resources\Logo-*.png neben der EXE, sonst eingebettet
- public static Image ReitznerLogo(bool dark) {
-  string name=dark?"Logo-dunkel.png":"Logo-hell.png";
+ // GS-Logo (Info-Fenster und Footer): Resources\GS-Logo.png neben der EXE, sonst das eingebettete Logo
+ static Image gsLogo;
+ static bool gsLoaded;
+ public static Image GsLogo() {
+  if(gsLoaded)return gsLogo;
+  gsLoaded=true;
+  gsLogo=LoadImage("GS-Logo.png");
+  return gsLogo;
+ }
+ static Image LoadImage(string name) {
   try {
    string file=Path.Combine(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"Resources"),name);
    if(File.Exists(file)) {
@@ -75,8 +81,7 @@ public class AboutDialog:Form {
   int W=Ui.Px(updates!=null?540:480); // mit Updates-Zeilen breiter
   int y=Ui.Px(24);
 
-  Image logo=ReitznerLogo(Ui.Dark);
-  var picture=new PictureBox{Image=logo,SizeMode=PictureBoxSizeMode.Zoom,Location=new Point(Ui.Px(64),y),Size=new Size(W-Ui.Px(128),Ui.Px(130)),BackColor=Ui.Bg};
+  var picture=new PictureBox{Image=GsLogo(),SizeMode=PictureBoxSizeMode.Zoom,Location=new Point(0,y),Size=new Size(W,Ui.Px(130)),BackColor=Ui.Bg};
   if(picture.Image==null)picture.Image=LoadAppIcon();
   Controls.Add(picture);
   y+=Ui.Px(146);
@@ -94,7 +99,7 @@ public class AboutDialog:Form {
   var tip=new ModernToolTip();
   string built;
   try {built=File.GetLastWriteTime(Application.ExecutablePath).ToString("dd.MM.yyyy");} catch {built="-";}
-  AddRow(table,tip,"Entwickler",AppInfo.Company);
+  AddRow(table,tip,"Entwickler",AppInfo.Author);
   AddRow(table,tip,"Erstellt",built);
   AddRow(table,tip,"Farbschema",(Ui.Dark?"dunkel":"hell")+" (folgt Windows)");
   // Bei den Demo-Screenshots kein privater Pfad im Bild

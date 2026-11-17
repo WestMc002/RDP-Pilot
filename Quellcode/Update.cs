@@ -1,4 +1,4 @@
-﻿// reitzner RDP Pilot – Update-Prüfung über die GitHub-Releases und Selbst-Update
+﻿// RDP Pilot – Update-Prüfung über die GitHub-Releases und Selbst-Update
 // Copyright (C) 2026 Günther Schoder · https://www.westmc002.de
 // Lizenz: GNU General Public License v3.0 oder später (siehe LICENSE)
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -28,7 +28,7 @@ sealed class UpdateInfo {
  public string Notes;   // Abschnitt "Änderungen" als Klartext (Tooltip der Hinweisleiste)
 }
 
-// Einstellungen: %LOCALAPPDATA%\reitzner RDP Pilot\Einstellungen.ini
+// Einstellungen: %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini
 // - Update-Prüfung: automatisch prüfen (Standard an), automatisch aktualisieren (Standard aus),
 //   Zeitpunkt der letzten Prüfung in UTC nach ISO 8601
 // - Verbindungen außerhalb des Programmordners ("Andere Datei …", Drag & Drop) und die zuletzt gewählte Verbindung
@@ -45,10 +45,27 @@ static class UpdateSettings {
   get {return Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),AppInfo.FullName),"Einstellungen.ini");}
  }
 
+ // Bis 1.44 stand vor dem Programmnamen noch ein Zusatz ("<Zusatz> RDP Pilot"):
+ // Einstellungen einmalig aus dem alten Ordner übernehmen
+ static void MoveOldSettings() {
+  try {
+   if(File.Exists(FilePath))return;
+   string root=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+   foreach(string dir in Directory.GetDirectories(root,"* "+AppInfo.Product)) {
+    string old=Path.Combine(dir,"Einstellungen.ini");
+    if(!File.Exists(old))continue;
+    Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+    File.Copy(old,FilePath);
+    return;
+   }
+  } catch {}
+ }
+
  public static void Load() {
   if(loaded)return;
   loaded=true;
   try {
+   MoveOldSettings();
    if(!File.Exists(FilePath))return;
    foreach(string line in File.ReadAllLines(FilePath,Encoding.UTF8)) {
     int i=line.IndexOf('=');
@@ -85,7 +102,7 @@ static class UpdateSettings {
 // Fragt nur die öffentliche GitHub-Schnittstelle ab (ohne Anmeldung, es werden keine Daten übertragen).
 // Selbst-Update: ZIP laden, Hilfsskript starten, Programm beenden; das Skript ersetzt EXE und Liesmich und startet neu.
 static class UpdateCheck {
- public const string Repo="WestMc002/reitzner-RDP-Pilot";
+ public const string Repo="WestMc002/RDP-Pilot";
  public const string ReleasesPage="https://github.com/"+Repo+"/releases";
  const string Api="https://api.github.com/repos/"+Repo+"/releases/latest";
 
@@ -93,10 +110,10 @@ static class UpdateCheck {
  public static bool Disabled;
 
  // Arbeitsordner für Download und Hilfsskript
- public static string Folder {get {return Path.Combine(Path.GetTempPath(),"reitzner-RDP-Pilot-Update");}}
+ public static string Folder {get {return Path.Combine(Path.GetTempPath(),"RDP-Pilot-Update");}}
  public static string LogFile {get {return Path.Combine(Folder,"Update.log");}}
 
- static string UserAgent {get {return "reitzner-RDP-Pilot/"+AppInfo.Version;}} // GitHub verlangt einen User-Agent
+ static string UserAgent {get {return "RDP-Pilot/"+AppInfo.Version;}} // GitHub verlangt einen User-Agent
 
  static void PrepareTls() {
   try {ServicePointManager.SecurityProtocol|=(SecurityProtocolType)3072;} catch {} // TLS 1.2
@@ -210,7 +227,7 @@ static class UpdateCheck {
   if(blocker!=null)throw new Exception(blocker);
   PrepareTls();
   Directory.CreateDirectory(Folder);
-  string zip=Path.Combine(Folder,"reitzner-RDP-Pilot-"+release.Version+".zip");
+  string zip=Path.Combine(Folder,"RDP-Pilot-"+release.Version+".zip");
   using(var client=new WebClient()) {
    client.Headers[HttpRequestHeader.UserAgent]=UserAgent;
    if(client.Proxy!=null)client.Proxy.Credentials=CredentialCache.DefaultCredentials;
@@ -245,7 +262,7 @@ static class UpdateCheck {
   try {Process.Start(new ProcessStartInfo(String.IsNullOrEmpty(url)?ReleasesPage:url){UseShellExecute=true});} catch {}
  }
 
- const string Script=@"# reitzner RDP Pilot – Update (wird vom Programm erzeugt)
+ const string Script=@"# RDP Pilot – Update (wird vom Programm erzeugt)
 param([int]$ProcessId,[string]$Zip,[string]$Exe,[string]$Version)
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $PSScriptRoot 'Update.log'
