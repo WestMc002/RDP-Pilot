@@ -1,0 +1,23 @@
+# Einmalig: alle alten Releases (v1.12 bis v1.44) samt Tags loeschen
+name: Alte Releases loeschen
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Releases und Tags loeschen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          for tag in $(gh release list -R "$REPO" -L 100 --json tagName -q '.[].tagName'); do
+            ver="${tag#v}"; minor=$(echo "$ver" | cut -d. -f2); major=$(echo "$ver" | cut -d. -f1)
+            if [ "$major" = "1" ] && [ "$minor" -le 44 ]; then
+              echo "Loesche $tag"
+              gh release delete "$tag" -R "$REPO" --yes --cleanup-tag
+            fi
+          done
+          echo "Verbleibend:"; gh release list -R "$REPO" -L 100
