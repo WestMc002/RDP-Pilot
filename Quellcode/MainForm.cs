@@ -155,7 +155,7 @@ public class MainForm:Form {
   };
   actions.Resize+=alignRestore;restore.SizeChanged+=alignRestore;
 
-  info.Dock=DockStyle.Fill;info.Margin=new Padding(0,0,0,Ui.Px(10));
+  info.Dock=DockStyle.Fill;info.Margin=new Padding(0,0,0,Ui.Px(10)); // Fußzeile: Abstand Hinweis → Text = Text → Fensterrand (unten 11, weil die Schrift in ihrer Zeile ca. 1 tiefer sitzt)
 
   footer=new FooterPanel{Dock=DockStyle.Fill,Margin=new Padding(0)};
   footer.Text="© "+DateTime.Now.Year+" · "+AppInfo.FullName;
@@ -168,7 +168,7 @@ public class MainForm:Form {
   updateBar.Later.Click+=(s,e)=>ShowUpdateBar(false);
   AboutDialog.Updates=MakeUpdateHooks();
 
-  layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(Ui.Px(24),Ui.Px(18),Ui.Px(24),Ui.Px(16)),ColumnCount=1,RowCount=7,BackColor=Ui.Bg};
+  layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(Ui.Px(24),Ui.Px(18),Ui.Px(24),Ui.Px(11)),ColumnCount=1,RowCount=7,BackColor=Ui.Bg};
   layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,Ui.Px(76)));
   layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0)); // Update-Hinweis
@@ -192,7 +192,7 @@ public class MainForm:Form {
    mapHeight=(int)(mapWidth*(double)u.Height/u.Width)+Ui.Px(32);
    mapHeight=Math.Max(Ui.Px(200),Math.Min(Ui.Px(420),mapHeight));
   }
-  int fixedHeight=Ui.Px(18)+Ui.Px(76)+Ui.Px(128)+Ui.Px(44)+Ui.Px(96)+Ui.Px(44)+Ui.Px(16)+Ui.Px(14)+Ui.Px(52)+Ui.Px(66)+Ui.Px(38)+Ui.Px(16);
+  int fixedHeight=Ui.Px(18)+Ui.Px(76)+Ui.Px(128)+Ui.Px(44)+Ui.Px(96)+Ui.Px(44)+Ui.Px(16)+Ui.Px(14)+Ui.Px(52)+Ui.Px(66)+Ui.Px(38)+Ui.Px(11);
   ClientSize=new Size(width,Math.Min(fixedHeight+mapHeight,work.Height-Ui.Px(40)));
   int chrome=Height-ClientSize.Height;
   MinimumSize=new Size(Math.Min(Ui.Px(820),work.Width),Math.Min(fixedHeight+Ui.Px(160)+chrome,work.Height));
