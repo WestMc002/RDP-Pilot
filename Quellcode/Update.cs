@@ -472,6 +472,12 @@ class UpdateBar:Control {
   }
  }
  protected override void OnTextChanged(EventArgs e){base.OnTextChanged(e);Invalidate();}
+ // Eigene Hintergrundfarbe = Füllfarbe der Leiste: Die Knöpfe malen ihre runden Ecken mit der
+ // Hintergrundfarbe des Elternelements aus, sonst stünden dort helle Zwickel in Fensterfarbe
+ Color OuterBack {get {return Parent!=null?Parent.BackColor:Ui.Bg;}}
+ Color Fill {get {return Ui.Blend(OuterBack,Ui.Accent,0.14f);}}
+ protected override void OnParentChanged(EventArgs e){base.OnParentChanged(e);BackColor=Fill;}
+ protected override void OnParentBackColorChanged(EventArgs e){base.OnParentBackColorChanged(e);BackColor=Fill;}
  protected override void OnLayout(LayoutEventArgs e) {
   base.OnLayout(e);
   if(Install==null||Page==null||Later==null)return;
@@ -484,11 +490,11 @@ class UpdateBar:Control {
  }
  protected override void OnPaint(PaintEventArgs e) {
   var g=e.Graphics;
-  Color back=Parent!=null?Parent.BackColor:Ui.Bg;
+  Color back=OuterBack;
   g.Clear(back);
   g.SmoothingMode=SmoothingMode.AntiAlias;
   using(var p=Ui.Round(new RectangleF(0.5f,0.5f,Width-1.5f,Height-1.5f),Ui.Px(8)))
-  using(var b=new SolidBrush(Ui.Blend(back,Ui.Accent,0.14f)))
+  using(var b=new SolidBrush(Fill))
   using(var pen=new Pen(Ui.Blend(back,Ui.Accent,0.45f))) {g.FillPath(b,p);g.DrawPath(pen,p);}
   int x=Ui.Px(16),gs=(int)Math.Round(11f*96f/72f*Ui.S);
   using(var img=Glyphs.Render(Glyphs.Download,Ui.Accent,gs))
