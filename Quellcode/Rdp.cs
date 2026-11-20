@@ -111,9 +111,29 @@ public class RdpFile {
  public string Path;
  public List<string> Lines=new List<string>();
  Encoding encoding;
+ // Stand der Datei beim Laden: Wurde sie danach von einem anderen Programm geändert, wird nicht überschrieben
+ DateTime loadedTime;
+ long loadedLength=-1;
+
+ // Eine .rdp-Datei hat wenige Kilobyte; größere Dateien werden nicht gelesen
+ public const long MaxSize=1024*1024;
+
+ // Die Datei wurde seit dem Laden von außen geändert
+ public sealed class ChangedOnDiskException:IOException {
+  public ChangedOnDiskException():base("Die Datei wurde seit dem Laden von einem anderen Programm geändert."){}
+ }
+
+ public static bool IsRdp(string path) {
+  return path!=null&&String.Equals(System.IO.Path.GetExtension(path),".rdp",StringComparison.OrdinalIgnoreCase);
+ }
 
  public static RdpFile Load(string path) {
+  if(!IsRdp(path))throw new InvalidDataException("Keine RDP-Datei (.rdp): "+System.IO.Path.GetFileName(path));
   var file=new RdpFile{Path=path};
+  var fi=new FileInfo(path);
+  if(fi.Length>MaxSize)throw new InvalidDataException("Die Datei ist zu groß für eine RDP-Datei ("+(fi.Length/1024)+" KB).");
+  file.loadedTime=fi.LastWriteTimeUtc;
+  file.loadedLength=fi.Length;
   byte[] bytes=File.ReadAllBytes(path);
   if(bytes.Length>=2&&bytes[0]==0xFF&&bytes[1]==0xFE)file.encoding=new UnicodeEncoding(false,true);
   else if(bytes.Length>=3&&bytes[0]==0xEF&&bytes[1]==0xBB&&bytes[2]==0xBF)file.encoding=new UTF8Encoding(true);
@@ -156,13 +176,44 @@ public class RdpFile {
   return new RdpFile{Path=path,Lines=new List<string>(Lines),encoding=encoding};
  }
 
+ // true, wenn die Datei seit dem Laden von außen geändert wurde
+ public bool ChangedOnDisk() {
+  if(loadedLength<0)return false; // neue Datei (z. B. Kopie für "Nur verbinden")
+  try {
+   var fi=new FileInfo(Path);
+   return !fi.Exists||fi.LastWriteTimeUtc!=loadedTime||fi.Length!=loadedLength;
+  } catch {return true;}
+ }
+
  // Speichert die Datei. Mit createBackup wird vorher das Original als .rdp.bak gesichert,
  // sofern noch keine Sicherung existiert. Rückgabe: true, wenn eine neue Sicherung angelegt wurde.
+ // Wurde die Datei seit dem Laden von außen geändert, wird nichts geschrieben (ChangedOnDiskException).
+ // Die neue Fassung entsteht erst vollständig als Hilfsdatei im selben Ordner und ersetzt dann das Original
+ // in einem Schritt – ein Abbruch beim Schreiben hinterlässt keine halbe Datei.
  public bool Save(bool createBackup) {
+  if(!IsRdp(Path))throw new InvalidDataException("Keine RDP-Datei (.rdp): "+System.IO.Path.GetFileName(Path));
+  if(ChangedOnDisk())throw new ChangedOnDiskException();
   string backup=Path+".bak";
   bool created=false;
-  if(createBackup&&!File.Exists(backup)){File.Copy(Path,backup);created=true;}
-  File.WriteAllText(Path,String.Join("\r\n",Lines.ToArray())+"\r\n",encoding);
+  if(createBackup&&File.Exists(Path)&&!File.Exists(backup)){File.Copy(Path,backup);created=true;}
+  string temp=Path+"."+Guid.NewGuid().ToString("N").Substring(0,8)+".tmp";
+  try {
+   using(var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None))
+   using(var writer=new StreamWriter(stream,encoding)) {
+    writer.Write(String.Join("\r\n",Lines.ToArray())+"\r\n");
+    writer.Flush();
+    stream.Flush(true);
+   }
+   if(File.Exists(Path)) {
+    try {File.Replace(temp,Path,null,true);}
+    catch(PlatformNotSupportedException){File.Copy(temp,Path,true);} // Laufwerke ohne Ersetzen in einem Schritt
+   } else File.Move(temp,Path);
+  } finally {
+   try {if(File.Exists(temp))File.Delete(temp);} catch {}
+  }
+  var fi=new FileInfo(Path);
+  loadedTime=fi.LastWriteTimeUtc;
+  loadedLength=fi.Length;
   return created;
  }
 

@@ -387,6 +387,20 @@ public class MainForm:Form {
   base.Dispose(disposing);
  }
 
+ // Kopien für "Nur verbinden" (%TEMP%\RDP Pilot). mstsc liest die Datei beim Start; danach wird sie nicht mehr
+ // gebraucht. Kopien, die älter als maxAge sind, werden gelöscht – beim Programmstart und vor jedem neuen Start.
+ static string TempCopies {get {return Path.Combine(Path.GetTempPath(),AppInfo.FullName);}}
+ static void CleanTempCopies(TimeSpan maxAge) {
+  try {
+   if(!Directory.Exists(TempCopies))return;
+   DateTime limit=DateTime.UtcNow-maxAge;
+   foreach(string f in Directory.GetFiles(TempCopies,"*.rdp")) // Kopien bis 1.52 direkt im Ordner
+    try {if(File.GetLastWriteTimeUtc(f)<limit)File.Delete(f);} catch {}
+   foreach(string d in Directory.GetDirectories(TempCopies))
+    try {if(Directory.GetLastWriteTimeUtc(d)<limit)Directory.Delete(d,true);} catch {}
+  } catch {}
+ }
+
  // "Nur verbinden": verbindet mit der Auswahl, die gerade im Fenster zu sehen ist, ohne die Datei zu ändern.
  // Weicht sie von der gespeicherten ab, startet mstsc mit einer Kopie unter %TEMP%\RDP Pilot,
  // in die die Auswahl geschrieben wird. Sonst wird die Datei direkt gestartet (vorher Prüfung, ob die
@@ -402,7 +416,10 @@ public class MainForm:Form {
     if(answer!=DialogResult.Yes)return;
    }
    try {
-    string dir=Path.Combine(Path.GetTempPath(),AppInfo.FullName);
+    // Pro Start ein eigener Unterordner, damit sich gleichnamige Verbindungen nicht überschreiben;
+    // der Dateiname bleibt (mstsc zeigt ihn im Fenstertitel)
+    CleanTempCopies(TimeSpan.FromMinutes(10));
+    string dir=Path.Combine(TempCopies,Guid.NewGuid().ToString("N").Substring(0,12));
     Directory.CreateDirectory(dir);
     var copy=current.CopyTo(Path.Combine(dir,Path.GetFileName(current.Path)));
     copy.ApplyMonitors(sel,resolution.Checked,main);
@@ -445,7 +462,7 @@ public class MainForm:Form {
  // Automatisch still kurz nach dem Start, höchstens alle 20 Stunden; nicht bei Vorschaubildern und Screenshots
  protected override void OnShown(EventArgs e) {
   base.OnShown(e);
-  if(live)StartWatching();
+  if(live){StartWatching();CleanTempCopies(TimeSpan.FromMinutes(10));}
   if(UpdateCheck.Disabled||Demo.Active)return;
   UpdateSettings.Load();
   if(AfterUpdate) {
@@ -546,7 +563,7 @@ public class MainForm:Form {
    updateBar.Text="Neue Version "+update.Version+" verfügbar – installiert ist "+AppInfo.Version+".";
    string blocker=UpdateCheck.InstallBlocker();
    updateBar.Install.Enabled=blocker==null&&!String.IsNullOrEmpty(update.ZipUrl);
-   tips.SetToolTip(updateBar.Install,blocker??(String.IsNullOrEmpty(update.ZipUrl)?"Im Release ist keine ZIP-Datei angehängt.":
+   tips.SetToolTip(updateBar.Install,blocker??(String.IsNullOrEmpty(update.ZipUrl)?"Im Release ist keine passende ZIP-Datei.":
     "ZIP herunterladen, Programm beenden, EXE und Liesmich ersetzen und neu starten.\nDie Verbindungen (.rdp-Dateien) bleiben unverändert."));
    tips.SetToolTip(updateBar.Page,"Öffnet die Release-Seite auf GitHub.");
    tips.SetToolTip(updateBar.Later,"Blendet den Hinweis bis zum nächsten Start aus.");
@@ -615,6 +632,7 @@ public class MainForm:Form {
 
  void AddPath(string path,bool selectIt) {
   string full=Path.GetFullPath(path);
+  if(!RdpFile.IsRdp(full)){Status("Keine RDP-Datei (.rdp): "+Path.GetFileName(full),InfoKind.Warning);return;}
   int index=paths.FindIndex(p=>String.Equals(p,full,StringComparison.OrdinalIgnoreCase));
   if(index<0) {
    paths.Add(full);
@@ -670,7 +688,7 @@ public class MainForm:Form {
 
  void Browse() {
   using(var dialog=new OpenFileDialog()) {
-   dialog.Filter="Remotedesktop-Verbindungen (*.rdp)|*.rdp|Alle Dateien (*.*)|*.*";
+   dialog.Filter="Remotedesktop-Verbindungen (*.rdp)|*.rdp";
    string cur=CurrentPath();
    dialog.InitialDirectory=cur!=null?Path.GetDirectoryName(cur):folder;
    if(dialog.ShowDialog(this)==DialogResult.OK)AddPath(dialog.FileName,true);
@@ -730,6 +748,21 @@ public class MainForm:Form {
   try {
    current.ApplyMonitors(sel,resolution.Checked,map.MainMonitor);
    backupCreated=current.Save(backupCheck.Checked);
+  } catch(RdpFile.ChangedOnDiskException) {
+   // Die Datei wurde inzwischen außerhalb geändert (z. B. in der Remotedesktopverbindung): nichts überschreiben,
+   // sondern auf Wunsch die aktuelle Fassung neu laden und nur die Monitorauswahl übernehmen
+   var answer=MessageBox.Show(this,"„"+Path.GetFileName(current.Path)+"“ wurde seit dem Laden von einem anderen Programm geändert.\n\n"+
+    "Die aktuelle Fassung neu laden und nur die Monitorauswahl übernehmen?",AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2);
+   if(answer!=DialogResult.Yes){Status("Nicht gespeichert – die Datei wurde von einem anderen Programm geändert.",InfoKind.Warning);return;}
+   try {
+    var fresh=RdpFile.Load(current.Path);
+    fresh.ApplyMonitors(sel,resolution.Checked,map.MainMonitor);
+    backupCreated=fresh.Save(backupCheck.Checked);
+    current=fresh;
+   } catch(Exception ex) {
+    Status("Fehler beim Speichern: "+ex.Message,InfoKind.Error);
+    return;
+   }
   } catch(Exception ex) {
    Status("Fehler beim Speichern: "+ex.Message,InfoKind.Error);
    return;

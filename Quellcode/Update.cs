@@ -14,6 +14,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -26,6 +27,7 @@ sealed class UpdateInfo {
  public string Url;     // Release-Seite auf GitHub
  public string ZipUrl;  // angehängtes ZIP (EXE und Liesmich)
  public string Notes;   // Abschnitt "Änderungen" als Klartext (Tooltip der Hinweisleiste)
+ public string ZipSha256; // Prüfsumme des ZIP laut GitHub ("digest"); ohne sie wird nicht installiert
 }
 
 // Einstellungen: %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini
@@ -100,7 +102,9 @@ static class UpdateSettings {
 }
 
 // Fragt nur die öffentliche GitHub-Schnittstelle ab (ohne Anmeldung, es werden keine Daten übertragen).
-// Selbst-Update: ZIP laden, Hilfsskript starten, Programm beenden; das Skript ersetzt EXE und Liesmich und startet neu.
+// Selbst-Update nach den Globalen Richtlinien (Updates › Selbst-Update, Absicherung vom 20.11.2026):
+// ZIP laden und gegen die Prüfsumme von GitHub prüfen, Hilfsskript per -EncodedCommand starten, Programm beenden;
+// das Skript prüft das ZIP erneut und ersetzt nur EXE und Liesmich; ein eigener, nicht erhöhter Prozess startet neu.
 static class UpdateCheck {
  public const string Repo="WestMc002/RDP-Pilot";
  public const string ReleasesPage="https://github.com/"+Repo+"/releases";
@@ -146,7 +150,7 @@ static class UpdateCheck {
   string text;
   try {
    using(var resp=(HttpWebResponse)req.GetResponse())
-   using(var r=new StreamReader(resp.GetResponseStream(),Encoding.UTF8))text=r.ReadToEnd();
+   using(var r=new StreamReader(resp.GetResponseStream(),Encoding.UTF8))text=ReadLimited(r,MaxResponseChars);
   } catch(WebException ex) {
    var http=ex.Response as HttpWebResponse;
    // 404 bei /releases/latest: es gibt nur Vorabversionen oder noch nichts – kein Fehler
@@ -161,6 +165,8 @@ static class UpdateCheck {
      throw Fail("Keine Verbindung.",ex.Message);
    }
    throw Fail("Nicht erreichbar.",ex.Message);
+  } catch(InvalidDataException ex) {
+   throw Fail("Antwort unlesbar.",ex.Message);
   } catch(IOException ex) {
    throw Fail("Nicht erreichbar.",ex.Message);
   }
@@ -182,14 +188,37 @@ static class UpdateCheck {
     var a=o as Dictionary<string,object>;
     if(a==null||!a.ContainsKey("name")||!a.ContainsKey("browser_download_url"))continue;
     string name=a["name"] as string,dl=a["browser_download_url"] as string;
-    if(name!=null&&dl!=null&&name.EndsWith(".zip",StringComparison.OrdinalIgnoreCase)
+    // nur der Anhang "RDP-Pilot-<Version>.zip" (Globale Richtlinien, Updates › Prüfung)
+    if(name!=null&&dl!=null&&String.Equals(name,"RDP-Pilot-"+version+".zip",StringComparison.OrdinalIgnoreCase)
      &&dl.StartsWith("https://github.com/"+Repo+"/releases/download/",StringComparison.OrdinalIgnoreCase)) {
      info.ZipUrl=dl;
+     // Prüfsumme, die GitHub beim Hochladen ermittelt hat
+     string digest=a.ContainsKey("digest")?a["digest"] as string:null;
+     if(digest!=null&&digest.StartsWith("sha256:",StringComparison.OrdinalIgnoreCase)&&digest.Length==7+64)
+      info.ZipSha256=digest.Substring(7).ToUpperInvariant();
      break;
     }
    }
   info.Notes=ExtractNotes(obj.ContainsKey("body")?obj["body"] as string:null);
   return info;
+ }
+
+ // Antwort der Schnittstelle höchstens so groß lesen (eine Release-Antwort hat wenige Kilobyte)
+ const int MaxResponseChars=2*1024*1024;
+ static string ReadLimited(TextReader r,int max) {
+  var sb=new StringBuilder();
+  var buf=new char[8192];
+  int n;
+  while((n=r.Read(buf,0,buf.Length))>0) {
+   sb.Append(buf,0,n);
+   if(sb.Length>max)throw new InvalidDataException("Antwort größer als "+(max/1024/1024)+" MB.");
+  }
+  return sb.ToString();
+ }
+
+ static string Sha256(string file) {
+  using(var s=File.OpenRead(file))
+  using(var h=SHA256.Create())return BitConverter.ToString(h.ComputeHash(s)).Replace("-","");
  }
 
  // true, wenn die Version neuer als die laufende ist
@@ -219,14 +248,25 @@ static class UpdateCheck {
   } catch {return false;}
  }
 
- // ZIP herunterladen, Hilfsskript schreiben und starten. Das Skript wartet, bis dieses Programm beendet ist,
- // ersetzt EXE und Liesmich und startet das Programm neu. Danach muss der Aufrufer das Programm beenden.
+ // ZIP herunterladen, prüfen und das Hilfsskript starten. Das Skript wartet, bis dieses Programm beendet ist,
+ // prüft das ZIP erneut, ersetzt EXE und Liesmich und startet das Programm neu. Danach muss der Aufrufer das
+ // Programm beenden.
+ // Sicherheit:
+ // - Das Skript wird nicht als Datei abgelegt, sondern direkt übergeben (-EncodedCommand), damit es niemand
+ //   zwischen Schreiben und Start austauschen kann.
+ // - Prüfsumme: Das ZIP muss zur Prüfsumme passen, die GitHub zum Release-Anhang liefert ("digest"). Das Skript
+ //   kopiert es in einen eigenen Arbeitsordner (erhöht: %ProgramData%\RDP Pilot\Update\<zufällig>, nur SYSTEM und
+ //   Administratoren) und prüft dort noch einmal, ob es noch dieselbe Datei ist.
+ // - Das Skript startet das Programm nicht selbst neu: Ein zweiter, nicht erhöhter Prozess wartet auf sein Ende
+ //   und startet das Programm mit --nach-update – so läuft es nach einem erhöhten Update nicht mit
+ //   Administratorrechten weiter.
  public static async Task Install(UpdateInfo release,Action<int> progress) {
-  if(String.IsNullOrEmpty(release.ZipUrl))throw new Exception("Im Release ist keine ZIP-Datei angehängt.");
+  if(String.IsNullOrEmpty(release.ZipUrl))throw new Exception("Im Release ist keine passende ZIP-Datei.");
   string blocker=InstallBlocker();
   if(blocker!=null)throw new Exception(blocker);
   PrepareTls();
   Directory.CreateDirectory(Folder);
+  try {File.Delete(Path.Combine(Folder,"Update.ps1"));} catch {} // Hilfsskript früherer Versionen
   string zip=Path.Combine(Folder,"RDP-Pilot-"+release.Version+".zip");
   using(var client=new WebClient()) {
    client.Headers[HttpRequestHeader.UserAgent]=UserAgent;
@@ -234,23 +274,45 @@ static class UpdateCheck {
    if(progress!=null)client.DownloadProgressChanged+=(s,e)=>progress(e.ProgressPercentage);
    await client.DownloadFileTaskAsync(new Uri(release.ZipUrl),zip);
   }
-  if(new FileInfo(zip).Length<1024)throw new Exception("Die heruntergeladene Datei ist unvollständig.");
-  string script=Path.Combine(Folder,"Update.ps1");
-  File.WriteAllText(script,Script,new UTF8Encoding(true));
+  // Ohne Prüfsumme von GitHub oder bei Abweichung nicht installieren (Kurzmeldung, in "Details" beide Werte)
+  string hash=Sha256(zip);
+  if(String.IsNullOrEmpty(release.ZipSha256)||!String.Equals(hash,release.ZipSha256,StringComparison.OrdinalIgnoreCase)) {
+   try {File.Delete(zip);} catch {}
+   throw Fail("Download beschädigt.","SHA-256 laut GitHub: "+(String.IsNullOrEmpty(release.ZipSha256)?"(keine angegeben)":release.ZipSha256)+
+    "\r\nSHA-256 der geladenen Datei: "+hash);
+  }
   try {File.Delete(LogFile);} catch {}
   string exe=Application.ExecutablePath;
   string target=Path.GetDirectoryName(exe);
-  var start=new ProcessStartInfo("powershell.exe",
-   "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \""+script+"\" -ProcessId "+Process.GetCurrentProcess().Id+
-   " -Zip \""+zip+"\" -Exe \""+exe+"\" -Version \""+release.Version+"\""){UseShellExecute=true,WindowStyle=ProcessWindowStyle.Hidden};
+  int pid=Process.GetCurrentProcess().Id;
+  bool elevate=!CanWrite(target);
+  var start=PowerShell(Script,
+   "-ProcessId "+pid+" -Zip "+PsQuote(zip)+" -Hash "+PsQuote(hash)+" -Exe "+PsQuote(exe)+
+   " -Version "+PsQuote(release.Version)+" -Log "+PsQuote(LogFile));
   // Programmordner ohne Schreibrechte (z. B. unter Programme): Hilfsskript mit Administratorrechten starten
-  if(!CanWrite(target))start.Verb="runas";
-  try {Process.Start(start);}
+  if(elevate)start.Verb="runas";
+  Process updater;
+  try {updater=Process.Start(start);}
   catch(System.ComponentModel.Win32Exception ex) {
    if(ex.NativeErrorCode==1223)throw new Exception("Update abgebrochen (Administratorrechte nicht erteilt).");
    throw;
   }
+  int updaterId=0;
+  try {if(updater!=null)updaterId=updater.Id;} catch {}
+  // Neustart mit normalen Rechten, sobald das Hilfsskript fertig ist
+  Process.Start(PowerShell(RestartScript,"-ProcessId "+pid+" -UpdaterId "+updaterId+" -Exe "+PsQuote(exe)+" -Log "+PsQuote(LogFile)));
  }
+
+ // PowerShell unsichtbar mit dem Skript als Befehl starten (kein Skript auf der Platte)
+ static ProcessStartInfo PowerShell(string script,string args) {
+  string command="& {"+script+"} "+args;
+  string encoded=Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+  return new ProcessStartInfo("powershell.exe","-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand "+encoded)
+   {UseShellExecute=true,WindowStyle=ProcessWindowStyle.Hidden};
+ }
+
+ // Text als PowerShell-Zeichenkette in einfachen Anführungszeichen
+ static string PsQuote(string s){return "'"+(s??"").Replace("'","''")+"'";}
 
  // Ergebnis des letzten Updates ("OK x" bzw. "FEHLER …") nach dem Neustart mit --nach-update
  public static string LastResult() {
@@ -262,36 +324,85 @@ static class UpdateCheck {
   try {Process.Start(new ProcessStartInfo(String.IsNullOrEmpty(url)?ReleasesPage:url){UseShellExecute=true});} catch {}
  }
 
- const string Script=@"# RDP Pilot – Update (wird vom Programm erzeugt)
-param([int]$ProcessId,[string]$Zip,[string]$Exe,[string]$Version)
+ // Hilfsskript (als -EncodedCommand übergeben). Ersetzt nur EXE und Liesmich; schlägt etwas fehl, wird der
+ // vorherige Stand aller ersetzten Dateien wiederhergestellt. Ergebnis "OK x" bzw. "FEHLER …" in Update.log.
+ const string Script=@"
+param([int]$ProcessId,[string]$Zip,[string]$Hash,[string]$Exe,[string]$Version,[string]$Log)
 $ErrorActionPreference = 'Stop'
-$log = Join-Path $PSScriptRoot 'Update.log'
 $name = Split-Path $Exe -Leaf
 $target = Split-Path $Exe -Parent
+$allowed = @($name, 'Liesmich.txt')
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$work = $null
+$saved = @()
 try {
   try { Wait-Process -Id $ProcessId -Timeout 60 -ErrorAction SilentlyContinue } catch {}
   Start-Sleep -Milliseconds 500
-  $dir = Join-Path $PSScriptRoot 'Neu'
-  if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
-  Expand-Archive -Path $Zip -DestinationPath $dir -Force
-  $new = Get-ChildItem $dir -Recurse -File | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+  if ($admin) {
+    $base = Join-Path $env:ProgramData 'RDP Pilot\Update'
+    [void][IO.Directory]::CreateDirectory($base)
+    $sec = New-Object System.Security.AccessControl.DirectorySecurity
+    $sec.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-32-544', 'S-1-5-18')) {
+      $id = New-Object System.Security.Principal.SecurityIdentifier($sid)
+      $sec.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($id, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    $work = Join-Path $base ([guid]::NewGuid().ToString('N'))
+    if (Test-Path -LiteralPath $work) { throw 'Arbeitsordner existiert bereits.' }
+    [void][IO.Directory]::CreateDirectory($work, $sec)
+  } else {
+    $work = Join-Path ([IO.Path]::GetTempPath()) ('RDP-Pilot-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($work)
+  }
+  $copy = Join-Path $work 'Update.zip'
+  Copy-Item -LiteralPath $Zip -Destination $copy
+  if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $Hash) { throw 'Die Update-Datei wurde nach dem Herunterladen verändert.' }
+  $dir = Join-Path $work 'Neu'
+  Expand-Archive -LiteralPath $copy -DestinationPath $dir
+  $new = Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object { $_.Name -eq $name } | Select-Object -First 1
   if (-not $new) { throw ('Im ZIP fehlt ' + $name) }
-  $old = $Exe + '.alt'
-  Copy-Item $Exe $old -Force
+  $files = @(Get-ChildItem -LiteralPath $new.DirectoryName -File | Where-Object { $allowed -contains $_.Name })
   try {
-    Copy-Item $new.FullName $Exe -Force
-    Get-ChildItem $new.DirectoryName -File | Where-Object { $_.Name -ne $name } | Copy-Item -Destination $target -Force
+    foreach ($f in $files) {
+      $dest = Join-Path $target $f.Name
+      if (Test-Path -LiteralPath $dest) { Copy-Item -LiteralPath $dest -Destination ($dest + '.alt') -Force; $saved += ,@($dest, ($dest + '.alt')) }
+      else { $saved += ,@($dest, '') }
+    }
+    foreach ($f in $files) { Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $target $f.Name) -Force }
   } catch {
-    Copy-Item $old $Exe -Force
+    foreach ($s in $saved) {
+      if ($s[1]) { Copy-Item -LiteralPath $s[1] -Destination $s[0] -Force -ErrorAction SilentlyContinue }
+      else { Remove-Item -LiteralPath $s[0] -Force -ErrorAction SilentlyContinue }
+    }
     throw
   }
-  Remove-Item $old -Force
-  Remove-Item $dir -Recurse -Force
-  Remove-Item $Zip -Force
-  ('OK ' + $Version) | Out-File $log -Encoding utf8
+  foreach ($s in $saved) { if ($s[1]) { Remove-Item -LiteralPath $s[1] -Force -ErrorAction SilentlyContinue } }
+  Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
+  ('OK ' + $Version) | Out-File -LiteralPath $Log -Encoding utf8
 } catch {
-  ('FEHLER ' + $_.Exception.Message) | Out-File $log -Encoding utf8
+  ('FEHLER ' + $_.Exception.Message) | Out-File -LiteralPath $Log -Encoding utf8
+} finally {
+  if ($work) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
+";
+
+ // Neustart mit normalen Rechten (läuft nicht erhöht): wartet auf das Ende von Programm und Hilfsskript
+ // (höchstens 15 Minuten), liest Update.log und startet das Programm mit --nach-update – auch nach einem Fehler,
+ // damit das Programm die Meldung zeigen kann. Get-Process statt Wait-Process: Auf ein erhöhtes Hilfsskript
+ // darf ein nicht erhöhter Prozess nicht unbedingt warten, sehen kann er es.
+ const string RestartScript=@"
+param([int]$ProcessId,[int]$UpdaterId,[string]$Exe,[string]$Log)
+try { Wait-Process -Id $ProcessId -Timeout 60 -ErrorAction SilentlyContinue } catch {}
+$until = (Get-Date).AddMinutes(15)
+while ((Get-Date) -lt $until) {
+  if ($UpdaterId -gt 0) { if (-not (Get-Process -Id $UpdaterId -ErrorAction SilentlyContinue)) { break } }
+  elseif (Test-Path -LiteralPath $Log) { break }
+  Start-Sleep -Milliseconds 500
+}
+Start-Sleep -Milliseconds 500
+$result = ''
+try { $result = (Get-Content -LiteralPath $Log -Raw -ErrorAction Stop).Trim() } catch {}
+if (-not $result) { ('FEHLER Das Update wurde nicht abgeschlossen.') | Out-File -LiteralPath $Log -Encoding utf8 }
 Start-Process -FilePath $Exe -ArgumentList '--nach-update'
 ";
 
@@ -491,6 +602,7 @@ class UpdateBar:Control {
  protected override void OnPaint(PaintEventArgs e) {
   var g=e.Graphics;
   Color back=OuterBack;
+  if(BackColor!=Fill){BackColor=Fill;foreach(Control c in Controls)c.Invalidate();}
   g.Clear(back);
   g.SmoothingMode=SmoothingMode.AntiAlias;
   using(var p=Ui.Round(new RectangleF(0.5f,0.5f,Width-1.5f,Height-1.5f),Ui.Px(8)))
@@ -510,13 +622,15 @@ class UpdateBar:Control {
 static class MiniJson {
  public static object Parse(string s) {
   int i=0;
-  object v=Value(s,ref i);
+  object v=Value(s,ref i,0);
   Skip(s,ref i);
   if(i!=s.Length)throw new InvalidDataException("JSON: unerwartete Zeichen am Ende.");
   return v;
  }
  static void Skip(string s,ref int i){while(i<s.Length&&Char.IsWhiteSpace(s[i]))i++;}
- static object Value(string s,ref int i) {
+ const int MaxDepth=64; // tiefer verschachtelte Antworten gelten als unlesbar (kein Stapelüberlauf)
+ static object Value(string s,ref int i,int depth) {
+  if(depth>MaxDepth)throw new InvalidDataException("JSON: zu tief verschachtelt.");
   Skip(s,ref i);
   if(i>=s.Length)throw new InvalidDataException("JSON: unerwartetes Ende.");
   char c=s[i];
@@ -529,7 +643,7 @@ static class MiniJson {
     string key=Str(s,ref i);
     Skip(s,ref i);
     Expect(s,ref i,':');
-    d[key]=Value(s,ref i);
+    d[key]=Value(s,ref i,depth+1);
     Skip(s,ref i);
     if(i<s.Length&&s[i]==','){i++;continue;}
     Expect(s,ref i,'}');
@@ -541,7 +655,7 @@ static class MiniJson {
    i++;Skip(s,ref i);
    if(i<s.Length&&s[i]==']'){i++;return l;}
    while(true) {
-    l.Add(Value(s,ref i));
+    l.Add(Value(s,ref i,depth+1));
     Skip(s,ref i);
     if(i<s.Length&&s[i]==','){i++;continue;}
     Expect(s,ref i,']');

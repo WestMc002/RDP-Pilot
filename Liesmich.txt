@@ -87,6 +87,13 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.53  Sicherheit: Update nur mit passender Prüfsumme von GitHub, Hilfsskript nicht
+      mehr als Datei im Temp-Ordner, mit Administratorrechten in einem geschützten
+      Arbeitsordner unter ProgramData; Neustart danach immer mit normalen Rechten.
+      Bei einem Fehler wird der vorherige Stand aller Dateien wiederhergestellt.
+      RDP-Dateien werden sicher ersetzt; wurde eine Datei inzwischen von einem anderen
+      Programm geändert, fragt RDP Pilot nach, statt sie zu überschreiben.
+      "Nur verbinden": eigene Kopie je Start, alte Kopien werden gelöscht.
 1.52  Hinweisleiste "Neue Version": Knöpfe ohne helle Ecken
 1.51  Fußzeile: Abstand nach oben und unten gleich
 1.49  Programm heißt jetzt "RDP Pilot"; Info-Fenster im Design der anderen
