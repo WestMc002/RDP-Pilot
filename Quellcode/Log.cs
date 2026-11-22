@@ -10,7 +10,7 @@ using System.Text;
 namespace RDPilot {
 
 // Fehlerprotokoll Fehler.log in %LOCALAPPDATA%\RDP Pilot (wie Dock Pilot). Schreibt nur bei Fehlern, wirft selbst
-// nie eine Ausnahme und kürzt die Datei, wenn sie größer als 256 KB wird. Technisches zu Updates steht hier,
+// nie eine Ausnahme; ab 256 KB wird die Datei zu Fehler.alt.log umbenannt (nichts wird eingelesen). Technisches zu Updates steht hier,
 // Meldungen an Anwender nennen keine Pfade.
 static class Log {
  static readonly object Gate=new object();
@@ -27,13 +27,13 @@ static class Log {
    lock(Gate) {
     Directory.CreateDirectory(Folder);
     string path=FilePath;
+    // Rotation ohne Einlesen: ab 256 KB wird Fehler.log zu Fehler.alt.log (ältere Fassung wird ersetzt)
     try {
      var fi=new FileInfo(path);
      if(fi.Exists&&fi.Length>MaxBytes) {
-      // ältere Hälfte verwerfen
-      string all=File.ReadAllText(path,Encoding.UTF8);
-      int cut=all.IndexOf('\n',all.Length/2);
-      File.WriteAllText(path,cut>0?all.Substring(cut+1):"",new UTF8Encoding(false));
+      string old=Path.Combine(Folder,"Fehler.alt.log");
+      if(File.Exists(old))File.Replace(path,old,null);
+      else File.Move(path,old);
      }
     } catch {}
     string line=DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")+"  "+AppInfo.Version+"  "+area+": "+

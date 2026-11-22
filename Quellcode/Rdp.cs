@@ -421,12 +421,21 @@ public class RdpFile {
  static readonly string[] TargetKeys={"full address","alternate full address","server port","username",
   "gatewayhostname","gatewayusagemethod","gatewayprofileusagemethod","gatewaycredentialssource"};
 
- // Ein Zieleintrag kommt mehrfach vor: Welcher Wert gilt, ist dann unklar (RDP Pilot zeigt den ersten)
+ // Sicherheitsrelevante Einträge (Anmeldung, Weiterleitungen, Startprogramm, Signatur): kommen sie mehrfach vor,
+ // hängt es vom RDP-Client ab, welcher Wert gilt – solche Dateien werden wie doppelte Zieleinträge abgelehnt.
+ static readonly string[] SecurityKeys={"authentication level","enablecredsspsupport","prompt for credentials",
+  "prompt for credentials on client","negotiate security layer","disableconnectionsharing","kdcproxyname",
+  "redirectclipboard","redirectdrives","drivestoredirect","redirectprinters","redirectcomports","redirectsmartcards",
+  "redirectposdevices","redirectwebauthn","devicestoredirect","usbdevicestoredirect","camerastoredirect",
+  "audiocapturemode","alternate shell","shell working directory","remoteapplicationmode","remoteapplicationprogram",
+  "remoteapplicationname","remoteapplicationcmdline","remoteapplicationexpandcmdline","remoteapplicationexpandworkingdir",
+  "remoteapplicationfile","loadbalanceinfo","signature","signscope"};
+
+ // Ein Ziel- oder sicherheitsrelevanter Eintrag kommt mehrfach vor: Welcher Wert gilt, ist dann unklar
+ // (RDP Pilot zeigt den ersten). Verglichen wird der Schlüssel ohne Groß-/Kleinschreibung und Leerzeichen am Rand.
  public string AmbiguousKey() {
-  foreach(string key in TargetKeys) {
-   string prefix=key+":";
-   if(Lines.Count(l=>l.StartsWith(prefix,StringComparison.OrdinalIgnoreCase))>1)return key;
-  }
+  foreach(string key in TargetKeys.Concat(SecurityKeys))
+   if(Lines.Count(l=>l.IndexOf(':')>0&&KeyOf(l)==key)>1)return key;
   return null;
  }
 
@@ -436,11 +445,13 @@ public class RdpFile {
  static bool IsMonitorKey(string key){return MonitorKeys.Contains(key,StringComparer.OrdinalIgnoreCase);}
  static string KeyOf(string line){int i=line.IndexOf(':');return (i<0?line:line.Substring(0,i)).Trim().ToLowerInvariant();}
 
- // Alle Einstellungen außer der Monitorauswahl, unabhängig von der Reihenfolge der Zeilen
+ // Alle Einstellungen außer der Monitorauswahl mit Schlüssel, Typ und Wert. Verschiedene Schlüssel dürfen ihre
+ // Reihenfolge tauschen; mehrfach vorhandene Schlüssel behalten ihre Reihenfolge (OrderBy ist stabil), damit auch
+ // ein Umordnen von Duplikaten als Änderung zählt.
  public string SettingsSignature {
   get {
    return String.Join("\n",Lines.Where(l=>!IsMonitorKey(KeyOf(l)))
-    .Select(l=>KeyOf(l)+l.Substring(Math.Max(0,l.IndexOf(':')))).OrderBy(x=>x,StringComparer.Ordinal).ToArray());
+    .OrderBy(KeyOf,StringComparer.Ordinal).Select(l=>KeyOf(l)+":"+TypeOf(l)+":"+Value(l)).ToArray());
   }
  }
 
@@ -449,12 +460,14 @@ public class RdpFile {
   var keys=Lines.Concat(other.Lines).Select(KeyOf).Where(k=>k.Length>0&&!IsMonitorKey(k)).Distinct().ToList();
   var changes=new List<string>();
   foreach(string k in keys) {
-   var mine=Lines.Where(l=>KeyOf(l)==k).Select(Value).ToList();
-   var theirs=other.Lines.Where(l=>KeyOf(l)==k).Select(Value).ToList();
-   if(mine.SequenceEqual(theirs))continue;
-   string a=mine.Count==0?"(fehlt)":String.Join(" | ",mine.ToArray());
-   string c=theirs.Count==0?"(fehlt)":String.Join(" | ",theirs.ToArray());
-   changes.Add(TargetLabel(k)+": "+Shorten(a)+" → "+Shorten(c));
+   // Typ und Wert gemeinsam vergleichen, Reihenfolge mehrfacher Einträge zählt
+   var mine=Lines.Where(l=>KeyOf(l)==k).ToList();
+   var theirs=other.Lines.Where(l=>KeyOf(l)==k).ToList();
+   if(mine.Select(l=>TypeOf(l)+":"+Value(l)).SequenceEqual(theirs.Select(l=>TypeOf(l)+":"+Value(l))))continue;
+   // Gleiche Werte mit anderem Typ (z. B. s → i): Typ mit anzeigen, sonst sähe die Meldung unverändert aus
+   bool showType=mine.Select(Value).SequenceEqual(theirs.Select(Value));
+   string a=Describe(mine,showType),c=Describe(theirs,showType);
+   changes.Add(TargetLabel(k)+": "+a+" → "+c);
   }
   const int max=12;
   string text=String.Join("\n",changes.Take(max).ToArray());
@@ -462,6 +475,11 @@ public class RdpFile {
   return text;
  }
  static string Value(string line){string[] p=line.Split(new[]{':'},3);return p.Length==3?p[2]:"";}
+ static string TypeOf(string line){string[] p=line.Split(new[]{':'},3);return p.Length>=2?p[1].Trim().ToLowerInvariant():"";}
+ static string Describe(List<string> lines,bool showType) {
+  if(lines.Count==0)return "(fehlt)";
+  return String.Join(" | ",lines.Select(l=>(showType?"Typ "+(TypeOf(l).Length>0?TypeOf(l):"(leer)")+" ":"")+Shorten(Value(l))).ToArray());
+ }
  static string Shorten(string s){return s.Length>60?s.Substring(0,57)+"…":(s.Length>0?s:"(leer)");}
  static string TargetLabel(string key) {
   switch(key) {

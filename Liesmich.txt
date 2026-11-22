@@ -99,6 +99,14 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.55  Update: Prüfen, Aufräumen und Wiederherstellen laufen unter derselben Sperre wie das
+      Update selbst; die Wiederherstellung prüft das Journal vollständig, bevor sie etwas
+      zurücksetzt, und jede Sicherung über ihre Prüfsumme. Mit Administratorrechten werden
+      nur geschützte Arbeitsordner und Sicherungen verwendet. Fehlerprotokoll wird ab
+      256 KB umbenannt statt eingelesen.
+      Verbinden: Auch geänderte Typen und die Reihenfolge doppelter Einträge zählen als
+      Änderung; doppelte sicherheitsrelevante Einträge (z. B. Weiterleitungen, Anmeldung,
+      Startprogramm) werden wie doppelte Zieleinträge abgelehnt.
 1.54  Gemerkte Verbindungen im Netzwerk werden beim Start nicht mehr gelesen (kein
       Zugriff auf den Server), sondern erst, wenn man sie auswählt.
       Verbinden startet eine geprüfte Kopie der Verbindung: Hat sich das Ziel seit dem

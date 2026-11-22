@@ -534,7 +534,8 @@ public class MainForm:Form {
   if(!manual&&(!UpdateSettings.Auto||(!atStart&&(DateTime.UtcNow-UpdateSettings.Last).TotalHours<20)))return CurrentUpdateStatus();
   updateRunning=true;
   try {
-   var release=await Task.Run(()=>UpdateCheck.Latest());
+   // vor der Prüfung unter der Ziel-Sperre aufräumen, was ein abgebrochenes Update hinterlassen hat
+   var release=await Task.Run(()=>{UpdateCheck.Cleanup();return UpdateCheck.Latest();});
    updateFailure=null;
    UpdateSettings.Last=DateTime.UtcNow;
    UpdateSettings.Save();
@@ -621,8 +622,13 @@ public class MainForm:Form {
   }
   // nicht abgeschlossenes Update: erst die vorherige Version wiederherstellen (nur von Hand, mit Rückfrage)
   if(UpdateCheck.InstallBlocker()==UpdateCheck.PendingText) {
-   if(!automatic&&UpdateCheck.OfferRepair(this)){installing=true;Close();}
-   return;
+   if(automatic)return;
+   // zuerst still aufräumen, was nichts verändert hat (unter der Sperre des Installationsziels)
+   UpdateCheck.Cleanup();
+   if(UpdateCheck.InstallBlocker()==UpdateCheck.PendingText) {
+    if(UpdateCheck.OfferRepair(this)){installing=true;Close();}
+    return;
+   }
   }
   if(!automatic) {
    string text=AppInfo.FullName+" wird beendet, auf Version "+info.Version+" aktualisiert und neu gestartet.\r\n"+
