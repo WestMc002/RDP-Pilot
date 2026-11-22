@@ -74,6 +74,18 @@ eine, erscheint oben im Fenster ein Hinweis mit "Jetzt aktualisieren",
 "Release-Seite" und "Später". "Jetzt aktualisieren" lädt das ZIP, beendet das
 Programm, ersetzt EXE und Liesmich (mit Sicherung) und startet neu; die
 Verbindungen bleiben unverändert.
+Installiert wird nur eine Version, die der Herausgeber signiert hat: Neben dem
+ZIP liegt im Release eine signierte Prüfsumme (RDP-Pilot-<Version>.manifest).
+Fehlt sie oder passt sie nicht, zeigt das Info-Fenster "Nicht signiert." bzw.
+"Signatur ungültig." und es bleibt bei der Release-Seite.
+Übernommen werden nur "RDP Pilot.exe" und "Liesmich.txt", erst nach dem Beenden
+des Programms und jeweils in einem Schritt. Läuft RDP Pilot selbst gerade mit
+Administratorrechten, wird nicht aktualisiert: bitte normal starten. Schlägt ein
+Update fehl, läuft die bisherige Version weiter; Einzelheiten stehen im
+Fehlerprotokoll (%LOCALAPPDATA%\RDP Pilot\Fehler.log). Wurde ein Update
+unterbrochen (z. B. durch einen Absturz), stellt RDP Pilot beim nächsten
+"Jetzt aktualisieren" nach Rückfrage die vorherige Version wieder her; hatte es
+noch nichts verändert, räumt RDP Pilot still auf.
 Im Info-Fenster zeigt die Zeile "Updates" den Stand und die letzte Prüfung,
 "Jetzt prüfen" prüft von Hand, "Automatisch prüfen" schaltet die Prüfung ab.
 Bei einem Fehler steht dort eine kurze Meldung, die genaue Ursache unter "Details".
@@ -87,6 +99,27 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.54  Gemerkte Verbindungen im Netzwerk werden beim Start nicht mehr gelesen (kein
+      Zugriff auf den Server), sondern erst, wenn man sie auswählt.
+      Verbinden startet eine geprüfte Kopie der Verbindung: Hat sich das Ziel seit dem
+      Laden geändert, fragt RDP Pilot nach; doppelte Ziel- oder Gateway-Einträge
+      werden abgelehnt.
+      Auch über die Kommandozeile (/connect) wird nur eine geprüfte Kopie gestartet.
+      Speichern und Wiederherstellen prüfen unmittelbar vor dem Ersetzen noch einmal, ob
+      ein anderes Programm die Datei geändert hat; Laufwerke ohne sicheres Ersetzen werden
+      nicht mehr beschrieben.
+      Beim Verbinden zählt jede Einstellung außer der Monitorauswahl: Hat sie sich seit
+      dem Anzeigen geändert, zeigt RDP Pilot die Änderungen und fragt nach.
+      Updates nur noch signiert: Installiert wird nur ein Release mit gültiger Signatur
+      des Herausgebers; nur ein Update zur Zeit, jeder Versuch in einem eigenen
+      Arbeitsordner, mit Administratorrechten geschützt unter ProgramData; das Programm
+      läuft danach immer mit normalen Rechten.
+      Update noch sicherer: Download und Update-Skript mit Größengrenzen, Dateien werden
+      in einem Schritt ersetzt, mit Wiederherstellungsjournal; ein unterbrochenes Update
+      wird beim nächsten Mal nach Rückfrage zurückgesetzt. Kein Update, solange RDP Pilot
+      mit Administratorrechten läuft. Fehler stehen im Fehlerprotokoll (Fehler.log).
+      Hinweisleiste bei wenig Platz zweizeilig.
+      Wiederherstellen ersetzt die Datei nur, wenn sie seit dem Anzeigen unverändert ist.
 1.53  Sicherheit: Update nur mit passender Prüfsumme von GitHub, Hilfsskript nicht
       mehr als Datei im Temp-Ordner, mit Administratorrechten in einem geschützten
       Arbeitsordner unter ProgramData; Neustart danach immer mit normalen Rechten.

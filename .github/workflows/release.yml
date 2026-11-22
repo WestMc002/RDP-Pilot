@@ -1,23 +1,34 @@
-# RDP Pilot - automatische Bereitstellung als Download (Release)
+# RDP Pilot - Release aus dem signierten Release-Paket
+# Das Paket entsteht auf dem PC des Herausgebers (Erstellen.bat: ZIP mit RDP Pilot.exe und
+# Liesmich.txt, dazu ein mit dem privaten Schluessel signiertes Manifest) und liegt im Ordner
+# Release. Der Workflow baut nichts selbst: Er prueft, dass ZIP und Manifest zur Version
+# passen (Name, Version, SHA-256 - die Signatur prueft erst RDP Pilot, der Schluessel ist nicht
+# auf GitHub), und haengt beide an das Release.
 # Ausloeser: Aenderung dieser Datei auf main oder per Hand ueber "Run workflow"
-# mit Versionsangabe. Die Version kommt sonst aus dem neuesten Commit
-# "RDP Pilot <Version> - Aenderungen".
-# Gibt es das Release zur Version noch nicht, wird gebaut und das Release mit
-# dem ZIP angelegt. Gibt es es schon, wird nur der Release-Text aufgefrischt.
-# Release-Text: oben "Aenderungen" (Zeilen mit "- " aus dem neuesten Commit,
-# der die Versionsnummer nennt), darunter "Installation".
+# (Eingabe der Versionsnummer). Ohne Eingabe gilt die Version aus dem neuesten
+# Commit "RDP Pilot <Version> - Aenderungen".
+# Gibt es das Release zur Version schon, wird nur der Text aufgefrischt.
+# Vorabversion: steht im Titel des Versions-Commits "Vorabversion", wird das Release als
+# Vorabversion (Pre-release) angelegt. Per Hand: Eingabe "vorab" = ja/nein, auto = wie im Commit.
+# Vorabversionen liefert /releases/latest nicht aus - die Update-Pruefung bietet sie nicht an.
 
 name: Release
 
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/release.yml']
+    paths: [.github/workflows/release.yml]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (z. B. 1.12.2026.1101)'
-        required: true
+        description: 'Version (z. B. 1.4.2026.1110)'
+        required: false
+      vorab:
+        description: 'Vorabversion (auto = wie im Commit-Titel)'
+        required: false
+        default: 'auto'
+        type: choice
+        options: [auto, ja, nein]
 
 permissions:
   contents: write
@@ -36,16 +47,26 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
           $ver = '${{ github.event.inputs.version }}'
           if(-not $ver) {
-            $subjects = git log --format=%s
-            foreach($s in $subjects) {
-              if($s -match '^RDP Pilot v?(\d+\.\d+\.\d+\.\d+)') { $ver = $Matches[1]; break }
-            }
+            $subj = git log --format=%s | Where-Object { $_ -match '^RDP Pilot (\d+\.\d+\.\d+\.\d+)' } | Select-Object -First 1
+            if($subj -match '^RDP Pilot (\d+\.\d+\.\d+\.\d+)') { $ver = $Matches[1] }
           }
-          if($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "ungueltige oder fehlende Version: $ver" }
+          if($ver -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "keine gueltige Version gefunden: $ver" }
           "ver=$ver" >> $env:GITHUB_OUTPUT
+          # Vorabversion? Eingabe ja/nein hat Vorrang, sonst Titel des Versions-Commits
+          $vorab = '${{ github.event.inputs.vorab }}'
+          if(-not $vorab) { $vorab = 'auto' }
+          $pre = 0
+          if($vorab -eq 'ja') { $pre = 1 }
+          elseif($vorab -eq 'auto') {
+            $subj = git log --format=%s -F --grep="$ver" -n 1
+            if($subj -match 'Vorabversion') { $pre = 1 }
+          }
+          "pre=$pre" >> $env:GITHUB_OUTPUT
+          "vorab=$vorab" >> $env:GITHUB_OUTPUT
+          Write-Host "Version $ver, Vorabversion: $pre"
           gh release view "v$ver" *> $null
           if($LASTEXITCODE -eq 0) { "exists=1" >> $env:GITHUB_OUTPUT; Write-Host "Release v$ver existiert bereits - nur Text auffrischen" }
           else { "exists=0" >> $env:GITHUB_OUTPUT }
@@ -54,71 +75,77 @@ jobs:
       - name: Release-Text erstellen
         shell: pwsh
         run: |
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          [Console]::OutputEncoding = [Text.Encoding]::UTF8
           $ver = '${{ steps.ver.outputs.ver }}'
-          # Neuester Commit, dessen Text die Versionsnummer nennt
-          $hash = git log --format=%H --fixed-strings --grep="$ver" -n 1
-          $items = @()
-          if($hash) {
-            $msg = git log -1 --format=%B $hash
-            $items = @($msg | Where-Object { $_ -match '^\s*[-*]\s+\S' } | ForEach-Object { "- " + ($_ -replace '^\s*[-*]\s+','') })
+          # neuester Commit, dessen Text die Versionsnummer nennt
+          $sha = git log --format=%H -F --grep="$ver" -n 1
+          $punkte = @()
+          if($sha) {
+            $punkte = @(git log -1 --format=%B $sha | Where-Object { $_ -match '^\s*- ' } | ForEach-Object { $_.Trim() })
           }
-          if($items.Count -eq 0) { throw "Kein Commit mit Versionsnummer $ver und Aenderungspunkten gefunden" }
-          $zip = "RDP-Pilot-$ver.zip"
-          $lines = @()
-          $lines += "## Änderungen"
-          $lines += ""
-          $lines += $items
-          $lines += ""
-          $lines += "## Installation"
-          $lines += ""
-          $lines += "1. ``$zip`` herunterladen und in einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (.rdp-Dateien) liegen. Eine Installation ist nicht nötig."
-          $lines += "2. ``RDP Pilot.exe`` per Doppelklick starten. Das Programm zeigt alle .rdp-Dateien aus seinem Ordner an."
-          # Typografische Anführungszeichen nur in '...' - PowerShell wertet sie in "..." als Stringende
-          $lines += '3. Verbindung auswählen, die gewünschten Monitore anklicken (Hauptmonitor per Rechtsklick) und „Speichern & verbinden“ wählen.'
-          $lines += ""
-          $lines += "Bei einem Update die vorhandene EXE einfach ersetzen."
-          $lines += ""
-          $lines += "Voraussetzungen: Windows 10 oder 11 mit .NET Framework 4.x."
-          $lines += ""
-          $lines += "Eine ausführliche Beschreibung steht in ``Liesmich.txt`` im ZIP."
-          [System.IO.File]::WriteAllText("$PWD\notes.md", ($lines -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+          $zeilen = New-Object System.Collections.Generic.List[string]
+          if('${{ steps.ver.outputs.pre }}' -eq '1') {
+            $zeilen.Add('> **Vorabversion** zum Testen. Die automatische Update-Prüfung bietet Vorabversionen nicht an.')
+            $zeilen.Add('')
+          }
+          if($punkte.Count -gt 0) {
+            $zeilen.Add('## Änderungen'); $zeilen.Add('')
+            foreach($p in $punkte) { $zeilen.Add($p) }
+            $zeilen.Add('')
+          }
+          $zeilen.Add('## Installation')
+          $zeilen.Add('')
+          $zeilen.Add("- ZIP ``RDP-Pilot-$ver.zip`` herunterladen und in einen eigenen Ordner mit Schreibrechten entpacken, am besten in den Ordner, in dem deine Verbindungen (.rdp-Dateien) liegen. Eine Installation ist nicht nötig.")
+          $zeilen.Add('- `RDP Pilot.exe` per Doppelklick starten. Das Programm zeigt alle .rdp-Dateien aus seinem Ordner an.')
+          $zeilen.Add('- Erste Schritte: Verbindung auswählen, die gewünschten Monitore anklicken (Hauptmonitor per Rechtsklick) und „Speichern & verbinden“ wählen.')
+          $zeilen.Add('- Update: RDP Pilot sieht selbst auf GitHub nach neuen Versionen und aktualisiert sich auf Klick (Hinweisleiste oder Info-Fenster). Von Hand: RDP Pilot beenden und die vorhandene `RDP Pilot.exe` ersetzen.')
+          $zeilen.Add('- Voraussetzungen: Windows 10 oder 11 mit .NET Framework 4.x (in Windows enthalten).')
+          $zeilen.Add('- Signatur: `RDP-Pilot-<Version>.manifest` ist die signierte Prüfsumme des ZIP. RDP Pilot installiert Updates nur, wenn diese Signatur gültig ist.')
+          $zeilen.Add('- Ausführliche Beschreibung in `Liesmich.txt` im ZIP.')
+          [IO.File]::WriteAllText("$PWD\notes.md", ($zeilen -join "`n"), (New-Object System.Text.UTF8Encoding($false)))
           Get-Content notes.md -Encoding utf8
 
-      - name: Kompilieren
+      - name: Release-Paket pruefen
         if: steps.ver.outputs.exists == '0'
         shell: pwsh
         run: |
           $ver = '${{ steps.ver.outputs.ver }}'
-          @(
-            "[assembly: System.Reflection.AssemblyVersion(`"$ver`")]"
-            "[assembly: System.Reflection.AssemblyFileVersion(`"$ver`")]"
-            "[assembly: System.Reflection.AssemblyInformationalVersion(`"$ver`")]"
-            "namespace RDPilot { public static partial class AppInfo { public const string Version = `"$ver`"; } }"
-          ) | Set-Content Quellcode\VersionInfo.cs -Encoding utf8
-          New-Item -ItemType Directory -Force Bin | Out-Null
-          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          & $csc /nologo /target:winexe /optimize+ /codepage:65001 "/out:Bin\RDP Pilot.exe" `
-            "/win32icon:Resources\RDPilot.ico" "/resource:Resources\RDPilot.ico,RDPilot.ico" `
-            "/resource:Resources\GS-Logo.png,GS-Logo.png" `
-            "/resource:Resources\AppIcon.png,AppIcon.png" `
-            /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll Quellcode\*.cs
-          if($LASTEXITCODE -ne 0) { throw 'Kompilieren fehlgeschlagen' }
-          (Get-Item "Bin\RDP Pilot.exe").VersionInfo.FileVersion
+          $zip = "Release\RDP-Pilot-$ver.zip"
+          $man = "Release\RDP-Pilot-$ver.manifest"
+          if(-not (Test-Path -LiteralPath $zip)) { throw "Im Ordner Release fehlt $zip" }
+          if(-not (Test-Path -LiteralPath $man)) { throw "Im Ordner Release fehlt $man" }
+          $bytes = [IO.File]::ReadAllBytes($man)
+          if([Array]::IndexOf($bytes, [byte]13) -ge 0) { throw 'Das Manifest enthaelt CR (Zeilenende muss LF sein, sonst passt die Signatur nicht)' }
+          $werte = @{}
+          foreach($z in ([Text.Encoding]::UTF8.GetString($bytes) -split "`n")) { if($z -match '^([A-Za-z0-9]+)=(.*)$') { $werte[$Matches[1]] = $Matches[2] } }
+          if($werte['Programm'] -cne 'RDP Pilot') { throw "Manifest: Programm ist '$($werte['Programm'])'" }
+          if($werte['Version'] -cne $ver) { throw "Manifest: Version ist '$($werte['Version'])', erwartet $ver" }
+          if($werte['Datei'] -cne "RDP-Pilot-$ver.zip") { throw "Manifest: Datei ist '$($werte['Datei'])'" }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if($werte['SHA256'] -cne $hash) { throw "Manifest: SHA256 passt nicht zum ZIP ($hash)" }
+          if(-not $werte['Signatur']) { throw 'Manifest: Signatur fehlt' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $zip).Path)
+          try { $namen = @($z.Entries | ForEach-Object { $_.FullName }) } finally { $z.Dispose() }
+          if($namen -notcontains 'RDP Pilot.exe') { throw 'Im ZIP fehlt RDP Pilot.exe' }
+          Write-Host "Release-Paket in Ordnung: $($namen -join ', ') - SHA256 $hash, Schluessel $($werte['Schluessel'])"
 
       - name: Release anlegen
         if: steps.ver.outputs.exists == '0'
         shell: pwsh
         run: |
           $ver = '${{ steps.ver.outputs.ver }}'
-          $zip = "Bin\RDP-Pilot-$ver.zip"
-          Copy-Item Liesmich.txt Bin\
-          Compress-Archive -Path "Bin\RDP Pilot.exe","Bin\Liesmich.txt" -DestinationPath $zip -Force
-          gh release create "v$ver" $zip --title "RDP Pilot $ver" --notes-file notes.md --target $env:GITHUB_SHA
+          $ghArgs = @("v$ver", "Release\RDP-Pilot-$ver.zip", "Release\RDP-Pilot-$ver.manifest", '--title', "RDP Pilot $ver", '--notes-file', 'notes.md', '--target', $env:GITHUB_SHA)
+          if('${{ steps.ver.outputs.pre }}' -eq '1') { $ghArgs += '--prerelease' }
+          gh release create @ghArgs
 
       - name: Release-Text auffrischen
         if: steps.ver.outputs.exists == '1'
         shell: pwsh
         run: |
           $ver = '${{ steps.ver.outputs.ver }}'
-          gh release edit "v$ver" --notes-file notes.md
+          $ghArgs = @("v$ver", '--notes-file', 'notes.md')
+          # Vorabversion nur umstellen, wenn ausdrücklich gewählt (ja/nein)
+          if('${{ steps.ver.outputs.vorab }}' -eq 'ja') { $ghArgs += '--prerelease=true' }
+          if('${{ steps.ver.outputs.vorab }}' -eq 'nein') { $ghArgs += '--prerelease=false'; $ghArgs += '--latest' }
+          gh release edit @ghArgs

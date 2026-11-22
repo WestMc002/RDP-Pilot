@@ -5,14 +5,57 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace RDPilot {
+
+// Start einer Verbindung, gleich für Oberfläche und Kommandozeile: Die Datei wird einmal frisch eingelesen und
+// geprüft, mstsc bekommt eine eigene Kopie genau dieser Fassung (nicht die Originaldatei, die sich bis zum Start
+// noch ändern könnte). Kopien liegen in %TEMP%\RDP Pilot\<zufällig>\ und werden nach 10 Minuten gelöscht.
+public static class RdpLaunch {
+ // Systemprogramme nur über den festen Pfad starten, nie über den Suchpfad
+ public static string Mstsc {get {return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"mstsc.exe");}}
+ public static string TempRoot {get {return Path.Combine(Path.GetTempPath(),AppInfo.FullName);}}
+
+ public static void CleanTemp(TimeSpan maxAge) {
+  try {
+   if(!Directory.Exists(TempRoot))return;
+   DateTime limit=DateTime.UtcNow-maxAge;
+   foreach(string f in Directory.GetFiles(TempRoot,"*.rdp")) // Kopien bis 1.52 direkt im Ordner
+    try {if(File.GetLastWriteTimeUtc(f)<limit)File.Delete(f);} catch {}
+   foreach(string d in Directory.GetDirectories(TempRoot))
+    try {if(Directory.GetLastWriteTimeUtc(d)<limit)Directory.Delete(d,true);} catch {}
+  } catch {}
+ }
+
+ // Liest die Datei frisch ein. problem: Text, wenn ein Zieleintrag mehrfach vorkommt (dann nicht starten).
+ public static RdpFile Read(string path,out string problem) {
+  var fresh=RdpFile.Load(path);
+  string key=fresh.AmbiguousKey();
+  problem=key==null?null:"„"+Path.GetFileNameWithoutExtension(path)+"“ enthält den Eintrag „"+key+"“ mehrfach – unklar, wohin verbunden würde. Bitte die Datei bereinigen.";
+  return fresh;
+ }
+
+ // Kopie der geprüften Fassung anlegen (modify ändert nur die Kopie) und mstsc damit starten
+ public static void Start(RdpFile checkedFile,Action<RdpFile> modify) {
+  CleanTemp(TimeSpan.FromMinutes(10));
+  // Pro Start ein eigener Unterordner, damit sich gleichnamige Verbindungen nicht überschreiben;
+  // der Dateiname bleibt (mstsc zeigt ihn im Fenstertitel)
+  string dir=Path.Combine(TempRoot,Guid.NewGuid().ToString("N").Substring(0,12));
+  Directory.CreateDirectory(dir);
+  var copy=checkedFile.CopyTo(Path.Combine(dir,Path.GetFileName(checkedFile.Path)));
+  if(modify!=null)modify(copy);
+  copy.Save(false);
+  Process.Start(new ProcessStartInfo(Mstsc,"\""+copy.Path+"\""){UseShellExecute=false});
+ }
+}
 
 // Ein lokaler Monitor. Nr = Nummer von links nach rechts (Anzeige), Id = Monitor-ID für mstsc
 public class MonitorInfo {
@@ -111,9 +154,9 @@ public class RdpFile {
  public string Path;
  public List<string> Lines=new List<string>();
  Encoding encoding;
- // Stand der Datei beim Laden: Wurde sie danach von einem anderen Programm geändert, wird nicht überschrieben
- DateTime loadedTime;
- long loadedLength=-1;
+ // Inhalt der Datei beim Laden (SHA-256 der Bytes): Weicht die Datei beim Speichern davon ab, hat ein anderes
+ // Programm sie geändert, und sie wird nicht überschrieben. null = neue Datei (z. B. Kopie für "Nur verbinden").
+ string loadedHash;
 
  // Eine .rdp-Datei hat wenige Kilobyte; größere Dateien werden nicht gelesen
  public const long MaxSize=1024*1024;
@@ -123,6 +166,17 @@ public class RdpFile {
   public ChangedOnDiskException():base("Die Datei wurde seit dem Laden von einem anderen Programm geändert."){}
  }
 
+ // Netzwerkpfad (\\server\freigabe\… oder verbundenes Netzlaufwerk)? Ermittelt ohne Zugriff auf das Netz,
+ // damit beim Programmstart keine Verbindung zum Server (und keine Anmeldung) ausgelöst wird.
+ public static bool IsNetworkPath(string path) {
+  if(String.IsNullOrEmpty(path))return false;
+  if(path.StartsWith(@"\\")||path.StartsWith("//"))return !path.StartsWith(@"\\?\")||path.StartsWith(@"\\?\UNC\",StringComparison.OrdinalIgnoreCase);
+  try {
+   string root=System.IO.Path.GetPathRoot(path);
+   return !String.IsNullOrEmpty(root)&&root.Length>=2&&root[1]==':'&&new DriveInfo(root.Substring(0,1)).DriveType==DriveType.Network;
+  } catch {return false;}
+ }
+
  public static bool IsRdp(string path) {
   return path!=null&&String.Equals(System.IO.Path.GetExtension(path),".rdp",StringComparison.OrdinalIgnoreCase);
  }
@@ -130,11 +184,8 @@ public class RdpFile {
  public static RdpFile Load(string path) {
   if(!IsRdp(path))throw new InvalidDataException("Keine RDP-Datei (.rdp): "+System.IO.Path.GetFileName(path));
   var file=new RdpFile{Path=path};
-  var fi=new FileInfo(path);
-  if(fi.Length>MaxSize)throw new InvalidDataException("Die Datei ist zu groß für eine RDP-Datei ("+(fi.Length/1024)+" KB).");
-  file.loadedTime=fi.LastWriteTimeUtc;
-  file.loadedLength=fi.Length;
-  byte[] bytes=File.ReadAllBytes(path);
+  byte[] bytes=ReadLimited(path);
+  file.loadedHash=Hash(bytes);
   if(bytes.Length>=2&&bytes[0]==0xFF&&bytes[1]==0xFE)file.encoding=new UnicodeEncoding(false,true);
   else if(bytes.Length>=3&&bytes[0]==0xEF&&bytes[1]==0xBB&&bytes[2]==0xBF)file.encoding=new UTF8Encoding(true);
   else file.encoding=new UTF8Encoding(false);
@@ -176,13 +227,80 @@ public class RdpFile {
   return new RdpFile{Path=path,Lines=new List<string>(Lines),encoding=encoding};
  }
 
- // true, wenn die Datei seit dem Laden von außen geändert wurde
+ // Liest eine Datei in einem Zug aus demselben Stream und bricht ab, sobald mehr als MaxSize Bytes kommen
+ // (auch wenn die Datei erst während des Lesens wächst)
+ public static byte[] ReadLimited(string path) {
+  using(var s=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete)) {
+   var ms=new MemoryStream();
+   var buf=new byte[16384];
+   int n;
+   while((n=s.Read(buf,0,buf.Length))>0) {
+    ms.Write(buf,0,n);
+    if(ms.Length>MaxSize)throw new InvalidDataException("Die Datei ist zu groß für eine RDP-Datei (über "+(MaxSize/1024)+" KB).");
+   }
+   return ms.ToArray();
+  }
+ }
+
+ static string Hash(byte[] bytes) {
+  using(var h=SHA256.Create())return BitConverter.ToString(h.ComputeHash(bytes)).Replace("-","");
+ }
+
+ // true, wenn der Inhalt der Datei nicht mehr dem beim Laden entspricht
  public bool ChangedOnDisk() {
-  if(loadedLength<0)return false; // neue Datei (z. B. Kopie für "Nur verbinden")
+  if(loadedHash==null)return false; // neue Datei (z. B. Kopie für "Nur verbinden")
+  try {return !File.Exists(Path)||Hash(ReadLimited(Path))!=loadedHash;}
+  catch {return true;}
+ }
+
+ // Sperre je Datei, damit zwei RDP-Pilot-Fenster nicht gleichzeitig dieselbe Datei schreiben
+ static System.Threading.Mutex SaveLock(string path) {
+  string id=Hash(Encoding.UTF8.GetBytes(System.IO.Path.GetFullPath(path).ToUpperInvariant())).Substring(0,24);
+  var m=new System.Threading.Mutex(false,@"Local\RDP-Pilot-Datei-"+id);
   try {
-   var fi=new FileInfo(Path);
-   return !fi.Exists||fi.LastWriteTimeUtc!=loadedTime||fi.Length!=loadedLength;
-  } catch {return true;}
+   if(!m.WaitOne(5000)){m.Dispose();throw new IOException("Die Datei wird gerade von einem anderen RDP-Pilot-Fenster gespeichert.");}
+  } catch(System.Threading.AbandonedMutexException){}
+  return m;
+ }
+
+ // Schreibt Bytes vollständig in eine Hilfsdatei im Zielordner und ersetzt das Ziel dann in einem Schritt.
+ // check (optional) wird unmittelbar vor dem Austausch aufgerufen und kann abbrechen. Kann das Laufwerk
+ // nicht in einem Schritt ersetzen, wird nichts geändert.
+ static void WriteReplace(string target,byte[] bytes,Action check) {
+  string temp=target+"."+Guid.NewGuid().ToString("N").Substring(0,8)+".tmp";
+  try {
+   using(var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None)) {
+    stream.Write(bytes,0,bytes.Length);
+    stream.Flush(true);
+   }
+   if(check!=null)check();
+   if(File.Exists(target)) {
+    try {File.Replace(temp,target,null,true);}
+    catch(PlatformNotSupportedException) {
+     throw new IOException("Dieses Laufwerk kann die Datei nicht sicher in einem Schritt ersetzen. Es wurde nichts geändert.");
+    }
+   } else File.Move(temp,target);
+  } finally {
+   try {if(File.Exists(temp))File.Delete(temp);} catch {}
+  }
+ }
+
+ // Ersetzt eine Datei durch den Inhalt einer anderen (z. B. Wiederherstellen aus .rdp.bak), ebenfalls über eine
+ // vollständig geschriebene Hilfsdatei. expected: Fassung, die beim Bestätigen angezeigt war; weicht die Datei
+ // davon ab (vor dem Schreiben und unmittelbar vor dem Austausch geprüft), wird nichts ersetzt.
+ // Grenze des Konfliktschutzes: Gegen Programme, die die Datei ohne Sperre schreiben, bleibt zwischen der letzten
+ // Prüfung und dem Austausch ein sehr kurzes Zeitfenster; ihre Änderung kann dann verloren gehen.
+ public static void ReplaceWith(string target,string source,RdpFile expected) {
+  if(!IsRdp(target))throw new InvalidDataException("Keine RDP-Datei (.rdp): "+System.IO.Path.GetFileName(target));
+  byte[] bytes=ReadLimited(source);
+  using(var m=SaveLock(target)) {
+   try {
+    Action check=()=>{if(expected!=null&&expected.ChangedOnDisk())throw new ChangedOnDiskException();};
+    check();
+    WriteReplace(target,bytes,check);
+   }
+   finally {m.ReleaseMutex();}
+  }
  }
 
  // Speichert die Datei. Mit createBackup wird vorher das Original als .rdp.bak gesichert,
@@ -192,29 +310,27 @@ public class RdpFile {
  // in einem Schritt – ein Abbruch beim Schreiben hinterlässt keine halbe Datei.
  public bool Save(bool createBackup) {
   if(!IsRdp(Path))throw new InvalidDataException("Keine RDP-Datei (.rdp): "+System.IO.Path.GetFileName(Path));
-  if(ChangedOnDisk())throw new ChangedOnDiskException();
-  string backup=Path+".bak";
+  byte[] bytes=ToBytes();
   bool created=false;
-  if(createBackup&&File.Exists(Path)&&!File.Exists(backup)){File.Copy(Path,backup);created=true;}
-  string temp=Path+"."+Guid.NewGuid().ToString("N").Substring(0,8)+".tmp";
-  try {
-   using(var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None))
-   using(var writer=new StreamWriter(stream,encoding)) {
-    writer.Write(String.Join("\r\n",Lines.ToArray())+"\r\n");
-    writer.Flush();
-    stream.Flush(true);
-   }
-   if(File.Exists(Path)) {
-    try {File.Replace(temp,Path,null,true);}
-    catch(PlatformNotSupportedException){File.Copy(temp,Path,true);} // Laufwerke ohne Ersetzen in einem Schritt
-   } else File.Move(temp,Path);
-  } finally {
-   try {if(File.Exists(temp))File.Delete(temp);} catch {}
+  using(var m=SaveLock(Path)) {
+   try {
+    if(ChangedOnDisk())throw new ChangedOnDiskException();
+    // Sicherung ebenfalls über eine Hilfsdatei, damit nie eine halbe .bak entsteht
+    string backup=Path+".bak";
+    if(createBackup&&File.Exists(Path)&&!File.Exists(backup)){WriteReplace(backup,ReadLimited(Path),null);created=true;}
+    // unmittelbar vor dem Austausch noch einmal prüfen, ob ein anderes Programm geschrieben hat
+    WriteReplace(Path,bytes,()=>{if(ChangedOnDisk())throw new ChangedOnDiskException();});
+   } finally {m.ReleaseMutex();}
   }
-  var fi=new FileInfo(Path);
-  loadedTime=fi.LastWriteTimeUtc;
-  loadedLength=fi.Length;
+  loadedHash=Hash(bytes);
   return created;
+ }
+
+ // Inhalt so, wie er geschrieben wird (Kodierung wie beim Laden, mit Vorspann/BOM wie gehabt)
+ byte[] ToBytes() {
+  var ms=new MemoryStream();
+  using(var writer=new StreamWriter(ms,encoding)) writer.Write(String.Join("\r\n",Lines.ToArray())+"\r\n");
+  return ms.ToArray();
  }
 
  // Schreibt die Monitorauswahl in die Datei
@@ -299,6 +415,72 @@ public class RdpFile {
   if(p.Length>=6&&Int32.TryParse(p[2].Trim(),out x)&&Int32.TryParse(p[3].Trim(),out y)&&!monitors.Any(m=>m.Bounds.Contains(x+10,y+10)))
    return "einen Bildschirm eingestellt, der gerade nicht angeschlossen ist";
   return null;
+ }
+
+ // Einträge, die bestimmen, wohin und über welches Gateway verbunden wird
+ static readonly string[] TargetKeys={"full address","alternate full address","server port","username",
+  "gatewayhostname","gatewayusagemethod","gatewayprofileusagemethod","gatewaycredentialssource"};
+
+ // Ein Zieleintrag kommt mehrfach vor: Welcher Wert gilt, ist dann unklar (RDP Pilot zeigt den ersten)
+ public string AmbiguousKey() {
+  foreach(string key in TargetKeys) {
+   string prefix=key+":";
+   if(Lines.Count(l=>l.StartsWith(prefix,StringComparison.OrdinalIgnoreCase))>1)return key;
+  }
+  return null;
+ }
+
+ // Einträge, die RDP Pilot selbst setzt (Monitorauswahl). Alle anderen Einstellungen müssen beim Verbinden
+ // dieselben sein wie in der Fassung, die angezeigt bzw. gespeichert wurde.
+ public static readonly string[] MonitorKeys={"screen mode id","use multimon","selectedmonitors","winposstr","desktopwidth","desktopheight"};
+ static bool IsMonitorKey(string key){return MonitorKeys.Contains(key,StringComparer.OrdinalIgnoreCase);}
+ static string KeyOf(string line){int i=line.IndexOf(':');return (i<0?line:line.Substring(0,i)).Trim().ToLowerInvariant();}
+
+ // Alle Einstellungen außer der Monitorauswahl, unabhängig von der Reihenfolge der Zeilen
+ public string SettingsSignature {
+  get {
+   return String.Join("\n",Lines.Where(l=>!IsMonitorKey(KeyOf(l)))
+    .Select(l=>KeyOf(l)+l.Substring(Math.Max(0,l.IndexOf(':')))).OrderBy(x=>x,StringComparer.Ordinal).ToArray());
+  }
+ }
+
+ // Abweichende Einstellungen (außer Monitorauswahl) in Worten, z. B. "Server: alt.firma.de → neu.firma.de"
+ public string DescribeChanges(RdpFile other) {
+  var keys=Lines.Concat(other.Lines).Select(KeyOf).Where(k=>k.Length>0&&!IsMonitorKey(k)).Distinct().ToList();
+  var changes=new List<string>();
+  foreach(string k in keys) {
+   var mine=Lines.Where(l=>KeyOf(l)==k).Select(Value).ToList();
+   var theirs=other.Lines.Where(l=>KeyOf(l)==k).Select(Value).ToList();
+   if(mine.SequenceEqual(theirs))continue;
+   string a=mine.Count==0?"(fehlt)":String.Join(" | ",mine.ToArray());
+   string c=theirs.Count==0?"(fehlt)":String.Join(" | ",theirs.ToArray());
+   changes.Add(TargetLabel(k)+": "+Shorten(a)+" → "+Shorten(c));
+  }
+  const int max=12;
+  string text=String.Join("\n",changes.Take(max).ToArray());
+  if(changes.Count>max)text+="\n… und "+(changes.Count-max)+" weitere";
+  return text;
+ }
+ static string Value(string line){string[] p=line.Split(new[]{':'},3);return p.Length==3?p[2]:"";}
+ static string Shorten(string s){return s.Length>60?s.Substring(0,57)+"…":(s.Length>0?s:"(leer)");}
+ static string TargetLabel(string key) {
+  switch(key) {
+   case "full address":return "Server";
+   case "alternate full address":return "Alternative Adresse";
+   case "server port":return "Port";
+   case "username":return "Benutzer";
+   case "gatewayhostname":return "Gateway";
+   default:return key;
+  }
+ }
+
+ // Ziel in Worten, z. B. "server.firma.de · max (über Gateway rdgw.firma.de)"
+ public string DescribeTarget() {
+  string text=Server.Length>0?Server:"(kein Server)";
+  if(User.Length>0)text+=" · "+User;
+  string gw=Get("gatewayhostname");
+  if(!String.IsNullOrEmpty(gw))text+=" (über Gateway "+gw+")";
+  return text;
  }
 
  public string Server {

@@ -57,7 +57,7 @@ The interface is in **German**.
 - **Command line** for shortcuts and scripts
 - **Windows 11 design:** light/dark mode and Windows accent color, help texts on mouse-over
 - **Connect only:** starts the connection on the monitors currently selected without changing the file
-- **Update check:** at every start; optionally installs new versions automatically ("Update automatically", off by default)
+- **Update check:** at every start; optionally installs new versions automatically ("Update automatically", off by default); only releases signed by the publisher are installed
 
 ### Installation
 
@@ -98,7 +98,7 @@ Einmal festlegen, auf welchem Bildschirm – oder auf welchen Bildschirmen – e
 - **Kommandozeile** für Verknüpfungen und Skripte
 - **Windows-11-Design:** heller/dunkler Modus und Windows-Akzentfarbe, Hilfetexte bei Mouseover
 - **Nur verbinden:** startet die Verbindung auf den gerade ausgewählten Monitoren, ohne die Datei zu ändern
-- **Update-Prüfung:** bei jedem Start; auf Wunsch werden neue Versionen automatisch installiert („Automatisch aktualisieren“, Standard aus)
+- **Update-Prüfung:** bei jedem Start; auf Wunsch werden neue Versionen automatisch installiert („Automatisch aktualisieren“, Standard aus); installiert werden nur vom Herausgeber signierte Versionen
 
 ### Installation
 

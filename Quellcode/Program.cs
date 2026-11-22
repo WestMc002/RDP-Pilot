@@ -104,11 +104,23 @@ static class Program {
     var m=monitors[nr-1];
     if(!selection.Contains(m))selection.Add(m);
    }
-   var rdp=RdpFile.Load(Path.GetFullPath(file));
+   string problem;
+   var rdp=RdpLaunch.Read(Path.GetFullPath(file),out problem);
+   if(problem!=null)throw new Exception(problem);
+   // Einstellungen (außer Monitorauswahl) vor dem Speichern merken: Ändert ein anderes Programm etwas bis zum
+   // Start, wird nicht verbunden
+   string settings=rdp.SettingsSignature;
    // Der zuerst genannte Monitor wird Hauptmonitor der Sitzung
    rdp.ApplyMonitors(selection,true,selection[0]);
    rdp.Save(backup);
-   if(connect)System.Diagnostics.Process.Start("mstsc.exe","\""+rdp.Path+"\"");
+   if(connect) {
+    // derselbe Prüf- und Startweg wie in der Oberfläche; ohne Rückfrage: bei Mehrdeutigkeit oder geändertem
+    // Ziel abbrechen (Rückgabewert 1)
+    var fresh=RdpLaunch.Read(rdp.Path,out problem);
+    if(problem!=null)throw new Exception(problem);
+    if(fresh.SettingsSignature!=settings)throw new Exception("„"+Path.GetFileNameWithoutExtension(rdp.Path)+"“ wurde während des Speicherns von einem anderen Programm geändert. Nicht verbunden.");
+    RdpLaunch.Start(fresh,null);
+   }
    return 0;
   } catch(Exception e) {
    Ui.Init(); // Meldung im Programmdesign

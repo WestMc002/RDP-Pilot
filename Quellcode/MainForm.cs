@@ -74,6 +74,7 @@ public class MainForm:Form {
  // "Automatisch aktualisieren": ist das Programm beschäftigt, alle 5 Minuten erneut versuchen
  readonly System.Windows.Forms.Timer autoUpdateRetry=new System.Windows.Forms.Timer{Interval=5*60*1000};
  UpdateStatus updateFailure; // Ergebnis der letzten Prüfung von Hand bei Fehler bzw. "Nur Vorabversionen" (Info-Fenster)
+ string installFailure;      // automatisches Aktualisieren gescheitert: Originaltext für "Details" (null = nein)
  // Neustart durch das Update-Skript (--nach-update): Ergebnis melden
  public static bool AfterUpdate;
  ModernSelect select=new ModernSelect();
@@ -204,7 +205,7 @@ public class MainForm:Form {
   folderTimer.Tick+=(s,e)=>{folderTimer.Stop();FolderChanged();};
   displayTimer.Tick+=(s,e)=>{displayTimer.Stop();ReloadMonitors(true);};
   browse.Click+=(s,e)=>Browse();
-  openFolder.Click+=(s,e)=>Run("explorer.exe",Quote(folder));
+  openFolder.Click+=(s,e)=>Run(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"explorer.exe"),Quote(folder)); // fester Pfad
   save.Click+=(s,e)=>SaveCurrent(false);
   connect.Click+=(s,e)=>SaveCurrent(true);
   start.Click+=(s,e)=>StartOnly();
@@ -241,9 +242,13 @@ public class MainForm:Form {
   ReloadList(null);
   if(live) {
    // gemerkte Verbindungen aus anderen Ordnern wieder in die Liste, zuletzt gewählte Verbindung wieder auswählen
-   foreach(string f in UpdateSettings.Files.ToList())
-    if(File.Exists(f))AddPath(f,false);
-   if(String.IsNullOrEmpty(startFile)&&last!=null&&File.Exists(last))AddPath(last,true);
+   // Netzwerkpfade werden dabei nicht angefasst (kein Zugriff auf den Server beim Start), sondern erst gelesen,
+   // wenn man sie auswählt; eine zuletzt gewählte Verbindung im Netz wird deshalb nicht automatisch ausgewählt.
+   foreach(string f in UpdateSettings.Files.ToList()) {
+    if(RdpFile.IsNetworkPath(f))AddPath(f,false,true);
+    else if(File.Exists(f))AddPath(f,false);
+   }
+   if(String.IsNullOrEmpty(startFile)&&last!=null&&!RdpFile.IsNetworkPath(last)&&File.Exists(last))AddPath(last,true);
   }
   if(!String.IsNullOrEmpty(startFile)&&File.Exists(startFile))AddPath(startFile,true);
   if(paths.Count==0)Status("Keine .rdp-Dateien im Ordner gefunden. Lege deine Verbindungen neben die EXE oder wähle über „Andere Datei …“ eine aus.",InfoKind.Warning);
@@ -290,7 +295,7 @@ public class MainForm:Form {
   var answer=MessageBox.Show(this,"Monitor-IDs der Remotedesktopverbindung (selectedmonitors):\n\n"+String.Join("\n",lines)+
    "\n\nZum Vergleich die Anzeige der Remotedesktopverbindung (mstsc /l) öffnen?",
    AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Information,MessageBoxDefaultButton.Button2);
-  if(answer==DialogResult.Yes)Run("mstsc.exe","/l");
+  if(answer==DialogResult.Yes)Run(RdpLaunch.Mstsc,"/l");
  }
 
  // --- Bildschirme: identifizieren und Änderungen erkennen -----------------------------
@@ -387,20 +392,6 @@ public class MainForm:Form {
   base.Dispose(disposing);
  }
 
- // Kopien für "Nur verbinden" (%TEMP%\RDP Pilot). mstsc liest die Datei beim Start; danach wird sie nicht mehr
- // gebraucht. Kopien, die älter als maxAge sind, werden gelöscht – beim Programmstart und vor jedem neuen Start.
- static string TempCopies {get {return Path.Combine(Path.GetTempPath(),AppInfo.FullName);}}
- static void CleanTempCopies(TimeSpan maxAge) {
-  try {
-   if(!Directory.Exists(TempCopies))return;
-   DateTime limit=DateTime.UtcNow-maxAge;
-   foreach(string f in Directory.GetFiles(TempCopies,"*.rdp")) // Kopien bis 1.52 direkt im Ordner
-    try {if(File.GetLastWriteTimeUtc(f)<limit)File.Delete(f);} catch {}
-   foreach(string d in Directory.GetDirectories(TempCopies))
-    try {if(Directory.GetLastWriteTimeUtc(d)<limit)Directory.Delete(d,true);} catch {}
-  } catch {}
- }
-
  // "Nur verbinden": verbindet mit der Auswahl, die gerade im Fenster zu sehen ist, ohne die Datei zu ändern.
  // Weicht sie von der gespeicherten ab, startet mstsc mit einer Kopie unter %TEMP%\RDP Pilot,
  // in die die Auswahl geschrieben wird. Sonst wird die Datei direkt gestartet (vorher Prüfung, ob die
@@ -415,18 +406,8 @@ public class MainForm:Form {
      AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2);
     if(answer!=DialogResult.Yes)return;
    }
-   try {
-    // Pro Start ein eigener Unterordner, damit sich gleichnamige Verbindungen nicht überschreiben;
-    // der Dateiname bleibt (mstsc zeigt ihn im Fenstertitel)
-    CleanTempCopies(TimeSpan.FromMinutes(10));
-    string dir=Path.Combine(TempCopies,Guid.NewGuid().ToString("N").Substring(0,12));
-    Directory.CreateDirectory(dir);
-    var copy=current.CopyTo(Path.Combine(dir,Path.GetFileName(current.Path)));
-    copy.ApplyMonitors(sel,resolution.Checked,main);
-    copy.Save(false);
-    Run("mstsc.exe",Quote(copy.Path));
+   if(LaunchChecked(current,f=>f.ApplyMonitors(sel,resolution.Checked,main)))
     Status("Verbunden auf Monitor "+Monitors.Describe(sel)+" – nur für diese Sitzung, die Verbindung selbst ist unverändert. Zum Merken „Speichern“.",InfoKind.Info);
-   } catch(Exception ex){Status("Verbinden nicht möglich: "+ex.Message,InfoKind.Error);}
    return;
   }
   string missing=current.MissingMonitors(monitors);
@@ -436,8 +417,31 @@ public class MainForm:Form {
     AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning);
    if(answer!=DialogResult.Yes)return;
   }
-  Run("mstsc.exe",Quote(current.Path));
+  LaunchChecked(current,null);
  }
+
+ // Startet mstsc mit genau der Fassung, die geprüft wurde (RdpLaunch): Die Datei wird frisch eingelesen,
+ // mehrdeutige Ziel- oder Gateway-Einträge werden abgelehnt, und weicht irgendeine Einstellung außer der
+ // Monitorauswahl von der angezeigten Fassung (shown) ab, werden die Änderungen gezeigt und der Start muss
+ // bestätigt werden.
+ // modify ändert nur die Kopie, die mstsc bekommt.
+ bool LaunchChecked(RdpFile shown,Action<RdpFile> modify) {
+  string name=Path.GetFileNameWithoutExtension(shown.Path);
+  try {
+   string problem;
+   var fresh=RdpLaunch.Read(shown.Path,out problem);
+   if(problem!=null){Status(problem,InfoKind.Error);return false;}
+   if(fresh.SettingsSignature!=shown.SettingsSignature) {
+    var answer=MessageBox.Show(this,"„"+name+"“ wurde geändert, seit RDP Pilot die Verbindung angezeigt hat:\n\n"+
+     shown.DescribeChanges(fresh)+"\n\nMit den geänderten Einstellungen verbinden?",
+     AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2);
+    if(answer!=DialogResult.Yes){Status("Nicht verbunden – die Verbindung wurde von einem anderen Programm geändert.",InfoKind.Warning);return false;}
+   }
+   RdpLaunch.Start(fresh,modify);
+   return true;
+  } catch(Exception ex){Status("Verbinden nicht möglich: "+ex.Message,InfoKind.Error);return false;}
+ }
+
 
  // Weicht die Auswahl im Fenster (Monitore oder Hauptmonitor) von der gespeicherten ab?
  bool SelectionDiffers(IList<MonitorInfo> sel,MonitorInfo main) {
@@ -462,14 +466,22 @@ public class MainForm:Form {
  // Automatisch still kurz nach dem Start, höchstens alle 20 Stunden; nicht bei Vorschaubildern und Screenshots
  protected override void OnShown(EventArgs e) {
   base.OnShown(e);
-  if(live){StartWatching();CleanTempCopies(TimeSpan.FromMinutes(10));}
+  if(live){StartWatching();RdpLaunch.CleanTemp(TimeSpan.FromMinutes(10));}
   if(UpdateCheck.Disabled||Demo.Active)return;
   UpdateSettings.Load();
   if(AfterUpdate) {
    // Neustart durch das Update-Skript: Ergebnis melden
+   // Meldungen ohne Technik und ohne Pfade; Einzelheiten nur ins Fehlerprotokoll
    string result=UpdateCheck.LastResult();
-   if(result!=null&&result.StartsWith("OK"))Status("Update auf Version "+result.Substring(2).Trim()+" installiert.",InfoKind.Success);
-   else if(result!=null)Status("Update fehlgeschlagen: "+result.Replace("FEHLER","").Trim()+" – die bisherige Version läuft weiter.",InfoKind.Error);
+   if(result!=null&&result.StartsWith("OK "))Status("Update auf Version "+result.Substring(3).Trim()+" installiert.",InfoKind.Success);
+   else if(result!=null&&result.StartsWith("ZURUECK")) {
+    Log.Write("Update",result);
+    Status("Vorherige Version wiederhergestellt.",InfoKind.Success);
+   }
+   else if(result!=null) {
+    Log.Write("Update",result);
+    Status("Update nicht installiert – die bisherige Version läuft weiter. Einzelheiten stehen im Fehlerprotokoll.",InfoKind.Error);
+   }
   }
   // bei jedem Start still prüfen, etwa 15 s nach dem Start, ohne 20-Stunden-Sperre
   autoUpdateRetry.Tick+=(s,a)=>{autoUpdateRetry.Stop();TryAutoUpdate();};
@@ -491,7 +503,7 @@ public class MainForm:Form {
    // nach dem Einschalten sofort versuchen, wenn schon eine neue Version bekannt ist
    SetAutoInstall=on=>{UpdateSettings.AutoInstall=on;UpdateSettings.Save();if(on&&update!=null)BeginInvoke(new Action(TryAutoUpdate));},
    CheckNow=()=>CheckForUpdates(true),
-   CanInstall=()=>update!=null&&!String.IsNullOrEmpty(update.ZipUrl)&&UpdateCheck.InstallBlocker()==null,
+   CanInstall=()=>update!=null&&!String.IsNullOrEmpty(update.ZipUrl)&&CanStartInstall(UpdateCheck.InstallBlocker()),
    Install=()=>BeginInvoke(new Action(()=>{var t=InstallUpdate();})), // erst nach dem Schließen des Info-Fensters
    OpenPage=OpenReleasePage
   };
@@ -503,6 +515,10 @@ public class MainForm:Form {
   string last=UpdateSettings.Last==DateTime.MinValue?"":"Zuletzt geprüft "+UpdateSettings.Last.ToLocalTime().ToString("dd.MM.yyyy");
   // Fehler zuerst: auch ein fehlgeschlagenes automatisches Update steht so mit "Details" im Info-Fenster
   if(updateFailure!=null)return updateFailure;
+  // automatisches Aktualisieren gescheitert: Kurzmeldung mit "Details" statt der letzten Prüfung
+  if(update!=null&&installFailure!=null)return new UpdateStatus(UpdateKind.Available,"Version "+update.Version+" verfügbar","Update fehlgeschlagen.",installFailure);
+  // neue Version, aber nicht (gültig) signiert: wird nicht installiert, Grund mit "Details"
+  if(update!=null&&update.Problem!=null)return new UpdateStatus(UpdateKind.Available,"Version "+update.Version+" verfügbar",update.Problem,update.ProblemDetail);
   if(update!=null)return new UpdateStatus(UpdateKind.Available,"Version "+update.Version+" verfügbar",last);
   if(UpdateSettings.Last==DateTime.MinValue)return new UpdateStatus(UpdateKind.Unknown,"Noch nicht geprüft","");
   return new UpdateStatus(UpdateKind.Current,"Aktuell",last);
@@ -523,6 +539,7 @@ public class MainForm:Form {
    UpdateSettings.Last=DateTime.UtcNow;
    UpdateSettings.Save();
    if(UpdateCheck.IsNewer(release.Version)) {
+    if(update==null||update.Version!=release.Version)installFailure=null;
     update=release;
     ShowUpdateBar(true);
     // "Automatisch aktualisieren": ohne Rückfrage installieren, sobald nichts mehr läuft (nicht bei "Jetzt prüfen")
@@ -551,7 +568,7 @@ public class MainForm:Form {
  // "Automatisch aktualisieren": installieren, wenn nichts läuft – sonst alle 5 Minuten erneut versuchen
  void TryAutoUpdate() {
   if(IsDisposed||update==null||installing||Demo.Active||!UpdateSettings.AutoInstall||!UpdateSettings.Auto)return;
-  if(UpdateCheck.InstallBlocker()!=null||String.IsNullOrEmpty(update.ZipUrl))return;
+  if(UpdateCheck.InstallBlocker()!=null||String.IsNullOrEmpty(update.ZipUrl)||UpdateCheck.Busy)return;
   if(BusyForUpdate()){autoUpdateRetry.Stop();autoUpdateRetry.Start();return;}
   var t=InstallUpdate(true);
  }
@@ -561,9 +578,13 @@ public class MainForm:Form {
   show=show&&update!=null;
   if(show) {
    updateBar.Text="Neue Version "+update.Version+" verfügbar – installiert ist "+AppInfo.Version+".";
+   updateBar.NewVersion=update.Version;
    string blocker=UpdateCheck.InstallBlocker();
-   updateBar.Install.Enabled=blocker==null&&!String.IsNullOrEmpty(update.ZipUrl);
-   tips.SetToolTip(updateBar.Install,blocker??(String.IsNullOrEmpty(update.ZipUrl)?"Im Release ist keine passende ZIP-Datei.":
+   // nicht abgeschlossenes Update: Der Knopf bietet die Wiederherstellung an
+   updateBar.Install.Enabled=CanStartInstall(blocker)&&!String.IsNullOrEmpty(update.ZipUrl);
+   if(blocker==UpdateCheck.PendingText)blocker+=" „Jetzt aktualisieren“ stellt zuerst die vorherige Version wieder her.";
+   tips.SetToolTip(updateBar.Install,blocker??(update.Problem!=null?"Wird nicht installiert: "+update.Problem+"\n"+update.ProblemDetail:
+    String.IsNullOrEmpty(update.ZipUrl)?"Im Release ist keine passende ZIP-Datei.":
     "ZIP herunterladen, Programm beenden, EXE und Liesmich ersetzen und neu starten.\nDie Verbindungen (.rdp-Dateien) bleiben unverändert."));
    tips.SetToolTip(updateBar.Page,"Öffnet die Release-Seite auf GitHub.");
    tips.SetToolTip(updateBar.Later,"Blendet den Hinweis bis zum nächsten Start aus.");
@@ -581,6 +602,9 @@ public class MainForm:Form {
   }
  }
 
+ // Installieren möglich: kein Hindernis oder nur ein nicht abgeschlossenes Update (dann zuerst Wiederherstellung)
+ static bool CanStartInstall(string blocker){return blocker==null||blocker==UpdateCheck.PendingText;}
+
  void OpenReleasePage() {
   UpdateCheck.OpenPage(update!=null?update.Url:null);
  }
@@ -590,6 +614,16 @@ public class MainForm:Form {
  async Task InstallUpdate(bool automatic) {
   if(update==null||installing)return;
   var info=update;
+  // nur ein Update zur Zeit, auch über mehrere RDP-Pilot-Fenster und Konten hinweg
+  if(UpdateCheck.Busy) {
+   if(!automatic)MessageBox.Show(this,UpdateCheck.Running,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Information);
+   return;
+  }
+  // nicht abgeschlossenes Update: erst die vorherige Version wiederherstellen (nur von Hand, mit Rückfrage)
+  if(UpdateCheck.InstallBlocker()==UpdateCheck.PendingText) {
+   if(!automatic&&UpdateCheck.OfferRepair(this)){installing=true;Close();}
+   return;
+  }
   if(!automatic) {
    string text=AppInfo.FullName+" wird beendet, auf Version "+info.Version+" aktualisiert und neu gestartet.\r\n"+
     "Einstellungen und Verbindungen bleiben erhalten.";
@@ -599,17 +633,23 @@ public class MainForm:Form {
   foreach(var b in new[]{updateBar.Install,updateBar.Page,updateBar.Later})b.Enabled=false;
   string barText=updateBar.Text;
   try {
+   updateBar.NewVersion=null; // während des Downloads einzeilig
    updateBar.Text="Lade Version "+info.Version+" …";
    await UpdateCheck.Install(info,percent=>BeginInvoke(new Action(()=>updateBar.Text="Lade Version "+info.Version+" … "+percent+" %")));
    Close(); // das Skript wartet auf das Programmende, ersetzt die EXE und startet neu
   } catch(Exception ex) {
    // automatisch: keine Meldung – die Hinweisleiste bleibt, die Kurzmeldung mit "Details" steht im Info-Fenster
-   if(automatic)updateFailure=UpdateStatus.FromError(ex);
-   else MessageBox.Show(this,"Das Update ist fehlgeschlagen: "+ex.Message,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Warning);
+   Log.Write(automatic?"Update automatisch installieren":"Update installieren",ex);
+   if(automatic)installFailure=(ex.Data["Detail"] as string)??ex.Message;
+   else {
+    string detail=ex.Data.Contains("Detail")?ex.Data["Detail"] as string:null;
+    MessageBox.Show(this,"Das Update ist fehlgeschlagen: "+ex.Message+(String.IsNullOrEmpty(detail)?"":"\n\n"+detail),AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Warning);
+   }
    updateBar.Text=barText;
+   updateBar.NewVersion=info.Version;
    updateBar.Page.Enabled=true;
    updateBar.Later.Enabled=true;
-   updateBar.Install.Enabled=UpdateCheck.InstallBlocker()==null;
+   updateBar.Install.Enabled=CanStartInstall(UpdateCheck.InstallBlocker());
    installing=false;
   }
  }
@@ -622,15 +662,17 @@ public class MainForm:Form {
  string CurrentPath(){return select.SelectedIndex>=0&&select.SelectedIndex<paths.Count?paths[select.SelectedIndex]:null;}
 
  static string DescribeFile(string path) {
-  try {
-   var f=RdpFile.Load(path);
-   string server=f.Server,user=f.User;
-   if(server.Length>0&&user.Length>0)return server+"  ·  "+user;
-   return server+user;
-  } catch {return "";}
+  try {return Describe(RdpFile.Load(path));} catch {return "";}
+ }
+ static string Describe(RdpFile f) {
+  string server=f.Server,user=f.User;
+  if(server.Length>0&&user.Length>0)return server+"  ·  "+user;
+  return server+user;
  }
 
- void AddPath(string path,bool selectIt) {
+ void AddPath(string path,bool selectIt){AddPath(path,selectIt,false);}
+ // lazy: Netzwerkpfad nicht lesen, bevor er ausgewählt wird
+ void AddPath(string path,bool selectIt,bool lazy) {
   string full=Path.GetFullPath(path);
   if(!RdpFile.IsRdp(full)){Status("Keine RDP-Datei (.rdp): "+Path.GetFileName(full),InfoKind.Warning);return;}
   int index=paths.FindIndex(p=>String.Equals(p,full,StringComparison.OrdinalIgnoreCase));
@@ -638,7 +680,7 @@ public class MainForm:Form {
    paths.Add(full);
    string title=Path.GetFileNameWithoutExtension(full);
    if(!InFolder(full))title=title+"  ("+Path.GetDirectoryName(full)+")";
-   select.Items.Add(new ModernSelect.Item{Title=title,Detail=DescribeFile(full),Tag=full});
+   select.Items.Add(new ModernSelect.Item{Title=title,Detail=lazy&&!selectIt?"Netzwerkpfad – wird beim Auswählen gelesen":DescribeFile(full),Tag=full});
    index=paths.Count-1;
    if(!InFolder(full))RememberFile(full);
   }
@@ -653,7 +695,7 @@ public class MainForm:Form {
   if(UpdateSettings.Files.Contains(full,StringComparer.OrdinalIgnoreCase))return;
   UpdateSettings.Files.Add(full);
   // nicht mehr vorhandene Dateien entfernen, Liste begrenzen
-  UpdateSettings.Files.RemoveAll(f=>!File.Exists(f));
+  UpdateSettings.Files.RemoveAll(f=>!RdpFile.IsNetworkPath(f)&&!File.Exists(f)); // Netzwerkpfade nicht prüfen
   while(UpdateSettings.Files.Count>UpdateSettings.MaxFiles)UpdateSettings.Files.RemoveAt(0);
   UpdateSettings.Save();
  }
@@ -669,15 +711,20 @@ public class MainForm:Form {
 
  void ReloadList(string keep) {
   // über "Andere Datei …" hinzugefügte Verbindungen aus anderen Ordnern bleiben in der Liste
-  var external=paths.Where(p=>!InFolder(p)&&File.Exists(p)).ToList();
+  var external=paths.Where(p=>!InFolder(p)&&(RdpFile.IsNetworkPath(p)||File.Exists(p))).ToList();
   paths.Clear();select.Clear();
   try {
    foreach(string f in Directory.GetFiles(folder,"*.rdp").OrderBy(f=>Path.GetFileName(f),StringComparer.CurrentCultureIgnoreCase))AddPath(f,false);
   } catch(Exception ex){Status("Ordner konnte nicht gelesen werden: "+ex.Message,InfoKind.Error);}
-  foreach(string f in external)AddPath(f,false);
+  foreach(string f in external)AddPath(f,false,RdpFile.IsNetworkPath(f));
   if(keep!=null&&File.Exists(keep))AddPath(keep,true);
-  else if(paths.Count>0)select.SelectedIndex=0;
-  else LoadCurrent();
+  else {
+   // von selbst keine gemerkte Verbindung im Netz auswählen (die erst, wenn man sie anklickt);
+   // der Programmordner selbst ist ohnehin schon eingelesen
+   int first=paths.FindIndex(p=>InFolder(p)||!RdpFile.IsNetworkPath(p));
+   if(first>=0)select.SelectedIndex=first;
+   else LoadCurrent();
+  }
   UpdateCount();
  }
 
@@ -702,6 +749,8 @@ public class MainForm:Form {
   if(path!=null) {
    try {
     current=RdpFile.Load(path);
+    var item=select.SelectedItem;
+    if(item!=null){item.Detail=Describe(current);select.Invalidate();}
     map.SetSelection(current.CurrentMonitors(monitors),current.CurrentMain(monitors));
     var sel=map.Selection;
     Status("„"+Path.GetFileNameWithoutExtension(path)+"“ startet derzeit auf Monitor "+Monitors.Describe(sel)+(sel.Count>1?" (Hauptmonitor "+map.MainMonitor.Nr+")":"")+".",InfoKind.Info);
@@ -745,6 +794,8 @@ public class MainForm:Form {
    if(answer!=DialogResult.Yes)return;
   }
   bool backupCreated=false;
+  // Fassung, deren Ziel angezeigt wurde: Daran misst "Speichern & verbinden" später, ob sich das Ziel geändert hat
+  RdpFile shown=current.CopyTo(current.Path);
   try {
    current.ApplyMonitors(sel,resolution.Checked,map.MainMonitor);
    backupCreated=current.Save(backupCheck.Checked);
@@ -774,8 +825,7 @@ public class MainForm:Form {
   Status(text+".",InfoKind.Success);
   UpdateState();
   if(andConnect) {
-   Run("mstsc.exe",Quote(current.Path));
-   Close();
+   if(LaunchChecked(shown,null))Close();
   }
  }
 
@@ -786,8 +836,12 @@ public class MainForm:Form {
   var answer=MessageBox.Show(this,"Die aktuelle Datei wird durch die Sicherung ersetzt:\n"+Path.GetFileName(backup)+"\n\nUrsprüngliche Datei wiederherstellen?",AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Question,MessageBoxDefaultButton.Button2);
   if(answer!=DialogResult.Yes)return;
   try {
-   File.Copy(backup,current.Path,true);
+   // über eine vollständig geschriebene Hilfsdatei; nur, wenn die Datei noch der angezeigten Fassung entspricht
+   RdpFile.ReplaceWith(current.Path,backup,current);
    File.Delete(backup);
+  } catch(RdpFile.ChangedOnDiskException) {
+   Status("Nicht wiederhergestellt – „"+Path.GetFileName(current.Path)+"“ wurde inzwischen von einem anderen Programm geändert. Bitte neu laden (F5).",InfoKind.Warning);
+   return;
   } catch(Exception ex){Status("Wiederherstellen fehlgeschlagen: "+ex.Message,InfoKind.Error);return;}
   LoadCurrent();
   Status("Originaldatei wiederhergestellt.",InfoKind.Success);
