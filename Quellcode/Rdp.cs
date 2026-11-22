@@ -455,32 +455,88 @@ public class RdpFile {
   }
  }
 
- // Abweichende Einstellungen (außer Monitorauswahl) in Worten, z. B. "Server: alt.firma.de → neu.firma.de"
- public string DescribeChanges(RdpFile other) {
-  var keys=Lines.Concat(other.Lines).Select(KeyOf).Where(k=>k.Length>0&&!IsMonitorKey(k)).Distinct().ToList();
-  var changes=new List<string>();
-  foreach(string k in keys) {
+ // Abweichende Einstellungen (außer Monitorauswahl) in Worten, z. B. "Server: alt.firma.de → neu.firma.de".
+ // Rückgabe: Kurzfassung für die Rückfrage – Ziel- und sicherheitsrelevante Änderungen zuerst und vollständig, danach
+ // höchstens sechs weitere (gekürzt). full: baut erst bei Bedarf alle Änderungen ungekürzt (aufklappbare Gesamtliste).
+ // Ein abweichender Typ wird immer mit angezeigt ("Typ s 1 → Typ i 1"), auch wenn sich zugleich der Wert ändert.
+ // Beide Fassungen werden einmal nach Schlüssel gruppiert (Reihenfolge mehrfacher Einträge bleibt erhalten).
+ public string DescribeChanges(RdpFile other,out Func<string> full) {
+  var mineByKey=GroupByKey(Lines);
+  var theirsByKey=GroupByKey(other.Lines);
+  var keys=new List<string>();
+  var seen=new HashSet<string>();
+  foreach(var group in new[]{mineByKey,theirsByKey})
+   foreach(string k in group.Keys)
+    if(seen.Add(k))keys.Add(k);
+  // Ziel-, dann Sicherheitseinträge in fester Reihenfolge, danach alle übrigen (stabil)
+  var rank=new Dictionary<string,int>();
+  int r=0;
+  foreach(string k in TargetKeys.Concat(SecurityKeys))if(!rank.ContainsKey(k))rank[k]=r++;
+  var empty=new List<string>();
+  var changed=new List<KeyValuePair<string,bool>>(); // Schlüssel, Typ anzeigen
+  foreach(string k in keys.OrderBy(x=>rank.ContainsKey(x)?rank[x]:int.MaxValue)) {
+   List<string> mine,theirs;
+   if(!mineByKey.TryGetValue(k,out mine))mine=empty;
+   if(!theirsByKey.TryGetValue(k,out theirs))theirs=empty;
    // Typ und Wert gemeinsam vergleichen, Reihenfolge mehrfacher Einträge zählt
-   var mine=Lines.Where(l=>KeyOf(l)==k).ToList();
-   var theirs=other.Lines.Where(l=>KeyOf(l)==k).ToList();
-   if(mine.Select(l=>TypeOf(l)+":"+Value(l)).SequenceEqual(theirs.Select(l=>TypeOf(l)+":"+Value(l))))continue;
-   // Gleiche Werte mit anderem Typ (z. B. s → i): Typ mit anzeigen, sonst sähe die Meldung unverändert aus
-   bool showType=mine.Select(Value).SequenceEqual(theirs.Select(Value));
-   string a=Describe(mine,showType),c=Describe(theirs,showType);
-   changes.Add(TargetLabel(k)+": "+a+" → "+c);
+   bool same=mine.Count==theirs.Count;
+   bool typeDiff=mine.Count!=theirs.Count;
+   for(int i=0;i<mine.Count&&i<theirs.Count;i++) {
+    if(TypeOf(mine[i])!=TypeOf(theirs[i])){same=false;typeDiff=true;}
+    else if(Value(mine[i])!=Value(theirs[i]))same=false;
+   }
+   if(!same)changed.Add(new KeyValuePair<string,bool>(k,typeDiff));
   }
-  const int max=12;
-  string text=String.Join("\n",changes.Take(max).ToArray());
-  if(changes.Count>max)text+="\n… und "+(changes.Count-max)+" weitere";
+  var shortList=new List<string>();
+  int others=0,hidden=0;
+  foreach(var c in changed) {
+   string k=c.Key;
+   List<string> mine,theirs;
+   if(!mineByKey.TryGetValue(k,out mine))mine=empty;
+   if(!theirsByKey.TryGetValue(k,out theirs))theirs=empty;
+   if(rank.ContainsKey(k)) {
+    // wichtig: vollständig; nur sehr lange Werte (z. B. die Signatur) kürzen, ganz in der Gesamtliste
+    shortList.Add(TargetLabel(k)+": "+Describe(mine,c.Value,300)+" → "+Describe(theirs,c.Value,300));
+   } else if(others<6) {
+    others++;
+    shortList.Add(TargetLabel(k)+": "+Describe(mine,c.Value,60)+" → "+Describe(theirs,c.Value,60));
+   } else hidden++;
+  }
+  full=()=>{
+   var sb=new System.Text.StringBuilder();
+   foreach(var c in changed) {
+    List<string> mine,theirs;
+    if(!mineByKey.TryGetValue(c.Key,out mine))mine=empty;
+    if(!theirsByKey.TryGetValue(c.Key,out theirs))theirs=empty;
+    if(sb.Length>0)sb.Append('\n');
+    sb.Append(TargetLabel(c.Key)).Append(": ").Append(Describe(mine,c.Value,int.MaxValue)).Append(" → ").Append(Describe(theirs,c.Value,int.MaxValue));
+   }
+   return sb.ToString();
+  };
+  string text=String.Join("\n",shortList.ToArray());
+  if(hidden>0)text+="\n… und "+hidden+(hidden==1?" weitere Änderung":" weitere Änderungen")+" (siehe „Alle Änderungen“)";
   return text;
+ }
+
+ // Zeilen außer der Monitorauswahl nach Schlüssel gruppieren, Reihenfolge innerhalb eines Schlüssels bleibt
+ static Dictionary<string,List<string>> GroupByKey(List<string> lines) {
+  var map=new Dictionary<string,List<string>>();
+  foreach(string l in lines) {
+   string k=KeyOf(l);
+   if(k.Length==0||IsMonitorKey(k))continue;
+   List<string> list;
+   if(!map.TryGetValue(k,out list)){list=new List<string>();map[k]=list;}
+   list.Add(l);
+  }
+  return map;
  }
  static string Value(string line){string[] p=line.Split(new[]{':'},3);return p.Length==3?p[2]:"";}
  static string TypeOf(string line){string[] p=line.Split(new[]{':'},3);return p.Length>=2?p[1].Trim().ToLowerInvariant():"";}
- static string Describe(List<string> lines,bool showType) {
+ static string Describe(List<string> lines,bool showType,int max) {
   if(lines.Count==0)return "(fehlt)";
-  return String.Join(" | ",lines.Select(l=>(showType?"Typ "+(TypeOf(l).Length>0?TypeOf(l):"(leer)")+" ":"")+Shorten(Value(l))).ToArray());
+  return String.Join(" | ",lines.Select(l=>(showType?"Typ "+(TypeOf(l).Length>0?TypeOf(l):"(leer)")+" ":"")+Shorten(Value(l),max)).ToArray());
  }
- static string Shorten(string s){return s.Length>60?s.Substring(0,57)+"…":(s.Length>0?s:"(leer)");}
+ static string Shorten(string s,int max){return s.Length>max?s.Substring(0,max-1)+"…":(s.Length>0?s:"(leer)");}
  static string TargetLabel(string key) {
   switch(key) {
    case "full address":return "Server";

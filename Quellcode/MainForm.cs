@@ -77,6 +77,7 @@ public class MainForm:Form {
  string installFailure;      // automatisches Aktualisieren gescheitert: Originaltext für "Details" (null = nein)
  // Neustart durch das Update-Skript (--nach-update): Ergebnis melden
  public static bool AfterUpdate;
+ public static string UpdateAttempt; // Versuchskennung aus --nach-update (ab 1.56), sonst null
  ModernSelect select=new ModernSelect();
  MonitorMap map=new MonitorMap();
  ModernCheck resolution=new ModernCheck("Auflösung an den Monitor anpassen (nur bei einem Monitor)");
@@ -432,9 +433,12 @@ public class MainForm:Form {
    var fresh=RdpLaunch.Read(shown.Path,out problem);
    if(problem!=null){Status(problem,InfoKind.Error);return false;}
    if(fresh.SettingsSignature!=shown.SettingsSignature) {
-    var answer=MessageBox.Show(this,"„"+name+"“ wurde geändert, seit RDP Pilot die Verbindung angezeigt hat:\n\n"+
-     shown.DescribeChanges(fresh)+"\n\nMit den geänderten Einstellungen verbinden?",
-     AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2);
+    // Ziel- und Sicherheitsänderungen vollständig vorne, alle Änderungen ungekürzt unter „Alle Änderungen“
+    Func<string> all;
+    string summary=shown.DescribeChanges(fresh,out all);
+    var answer=MessageBox.ShowDetails(this,"„"+name+"“ wurde geändert, seit RDP Pilot die Verbindung angezeigt hat:\n\n"+
+     summary+"\n\nMit den geänderten Einstellungen verbinden?",all,"Alle Änderungen",
+     MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2);
     if(answer!=DialogResult.Yes){Status("Nicht verbunden – die Verbindung wurde von einem anderen Programm geändert.",InfoKind.Warning);return false;}
    }
    RdpLaunch.Start(fresh,modify);
@@ -455,8 +459,9 @@ public class MainForm:Form {
   return false;
  }
 
+ // Systemprogramme (Explorer, mstsc) nur über feste Pfade und direkt starten, nicht über die Shell
  void Run(string file,string args) {
-  try {Process.Start(file,args);}
+  try {Process.Start(new ProcessStartInfo(file,args){UseShellExecute=false});}
   catch(Exception ex){Status(file+" konnte nicht gestartet werden: "+ex.Message,InfoKind.Error);}
  }
 
@@ -472,7 +477,7 @@ public class MainForm:Form {
   if(AfterUpdate) {
    // Neustart durch das Update-Skript: Ergebnis melden
    // Meldungen ohne Technik und ohne Pfade; Einzelheiten nur ins Fehlerprotokoll
-   string result=UpdateCheck.LastResult();
+   string result=UpdateCheck.LastResult(UpdateAttempt);
    if(result!=null&&result.StartsWith("OK "))Status("Update auf Version "+result.Substring(3).Trim()+" installiert.",InfoKind.Success);
    else if(result!=null&&result.StartsWith("ZURUECK")) {
     Log.Write("Update",result);

@@ -99,6 +99,27 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.56  Update: Das Wiederherstellungsjournal hat ein festes Format mit Versionskennung und
+      nennt vor dem ersten Austausch alle geplanten Dateien. Aufräumen und Wiederherstellen
+      prüfen es nach denselben strengen Regeln; im Zweifel bleibt alles erhalten.
+      Nicht abgeschlossene Updates aus 1.54 und 1.55 werden an ihrem jeweiligen Format
+      erkannt und wiederhergestellt. Journal, Status und Sicherungen werden vor jedem
+      Austausch dauerhaft auf den Datenträger geschrieben (auch bei Stromausfall).
+      Ein Ziel darf im Journal nur einmal vorkommen. Die Wiederherstellung läuft wie das
+      Update über ein geprüftes Skript, nie aus einer Instanz mit Administratorrechten,
+      und meldet nach einem Abbruch mittendrin immer „offen“ statt neu zu starten.
+      Schreibprobe im Programmordner mit Zufallsnamen; Explorer und Remotedesktop werden
+      direkt über ihren festen Pfad gestartet.
+      Mehrere Installationen stören sich beim Update nicht mehr: Jeder Versuch hat sein
+      eigenes Ergebnis. Unter „Programme“ startet erst der Neustart-Helfer und dann das
+      Update mit Administratorrechten. Es ändert erst etwas, wenn RDP Pilot es für genau
+      diesen Versuch freigegeben hat – erst nachdem der Neustart-Helfer den Empfang
+      bestätigt hat; scheitert ein Schritt davor, wird nichts verändert.
+      Die alte Instanz wird an Prozess-ID und Startzeit erkannt. Nach einer
+      Wiederherstellung meldet auch eine ältere Version das Ergebnis.
+      Verbinden: Die Rückfrage zeigt Änderungen an Ziel, Gateway und sicherheitsrelevanten
+      Einstellungen zuerst und vollständig, Typänderungen immer; „Alle Änderungen“ klappt
+      die ungekürzte Gesamtliste auf.
 1.55  Update: Prüfen, Aufräumen und Wiederherstellen laufen unter derselben Sperre wie das
       Update selbst; die Wiederherstellung prüft das Journal vollständig, bevor sie etwas
       zurücksetzt, und jede Sicherung über ihre Prüfsumme. Mit Administratorrechten werden

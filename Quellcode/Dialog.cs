@@ -29,6 +29,14 @@ public static class MessageBox {
   if(Ui.UiFont==null)return System.Windows.Forms.MessageBox.Show(owner,text,caption??AppInfo.FullName,buttons,icon,defaultButton);
   using(var dialog=new MsgDialog(text,buttons,icon,defaultButton,null)) return dialog.ShowFor(owner);
  }
+
+ // Wie Show, dazu unter dem Text ein Link (z. B. „Alle Änderungen“), der eine Gesamtliste als graues,
+ // schreibgeschütztes Feld mit Bildlauf aufklappt (aufgeklappt heißt der Link „Weniger“). Die Liste wird erst beim
+ // ersten Aufklappen erzeugt (details).
+ public static DialogResult ShowDetails(IWin32Window owner,string text,Func<string> details,string detailsLink,MessageBoxButtons buttons,MessageBoxIcon icon,MessageBoxDefaultButton defaultButton) {
+  if(Ui.UiFont==null)return System.Windows.Forms.MessageBox.Show(owner,text,AppInfo.FullName,buttons,icon,defaultButton);
+  using(var dialog=new MsgDialog(text,buttons,icon,defaultButton,null,details,detailsLink)) return dialog.ShowFor(owner);
+ }
 }
 
 // Das eigentliche Fenster: Symbol links, Text, optional Kästchen (z. B. „Nicht mehr fragen“), Schaltflächen rechts unten
@@ -39,7 +47,18 @@ public class MsgDialog:Form {
 
  public bool Checked{get{return check!=null&&check.Checked;}}
 
- public MsgDialog(string text,MessageBoxButtons buttons,MessageBoxIcon icon,MessageBoxDefaultButton defaultButton,string checkText) {
+ readonly List<ModernButton> buttonList=new List<ModernButton>();
+ TextBox detailsBox;
+ Panel detailsPanel;
+ Label detailsLabel;
+ string detailsLinkText;
+ Func<string> detailsSource;
+ int detailsShift,detailsX,detailsY,detailsWidth;
+
+ public MsgDialog(string text,MessageBoxButtons buttons,MessageBoxIcon icon,MessageBoxDefaultButton defaultButton,string checkText)
+  :this(text,buttons,icon,defaultButton,checkText,null,null){}
+
+ public MsgDialog(string text,MessageBoxButtons buttons,MessageBoxIcon icon,MessageBoxDefaultButton defaultButton,string checkText,Func<string> details,string detailsLink) {
   Text=AppInfo.FullName; // Fenstertitel = Programmname
   try {Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);} catch {}
   // Fensterrahmen wie bei allen Dialogen: normaler Rahmen, feste Größe
@@ -105,11 +124,23 @@ public class MsgDialog:Form {
    Controls.Add(check);
    y=check.Bottom;
   }
+  if(details!=null) {
+   // Link wie „Details“ im Info-Fenster: Akzentfarbe, Handzeiger; klappt die Gesamtliste auf
+   detailsSource=details;
+   detailsLinkText=String.IsNullOrEmpty(detailsLink)?"Details":detailsLink;
+   detailsLabel=new Label{Text=detailsLinkText,AutoSize=true,UseMnemonic=false,ForeColor=Ui.Accent,BackColor=Ui.Bg,Font=Font,
+    Cursor=Cursors.Hand,Location=new Point(textX,y+Ui.Px(10))};
+   detailsLabel.Click+=(s,e)=>ToggleDetails();
+   Controls.Add(detailsLabel);
+   y=detailsLabel.Bottom;
+   detailsX=textX;detailsY=y+Ui.Px(8);detailsWidth=width-textX-pad;
+  }
   y+=Ui.Px(24);
   int x=width-pad-buttonsWidth;
   foreach(var b in created) {
    b.Location=new Point(x,y);
    Controls.Add(b);
+   buttonList.Add(b);
    x+=b.Width+Ui.Px(8);
   }
   ClientSize=new Size(width,y+created[0].Height+pad);
@@ -120,6 +151,39 @@ public class MsgDialog:Form {
   if(cancel!=null)CancelButton=cancel;
   created[defaultIndex].TabIndex=0;
   ActiveControl=created[defaultIndex];
+ }
+
+ // Gesamtliste auf- bzw. zuklappen: Knöpfe und Fenster rücken um die Feldhöhe; Größensperre vorher lösen
+ void ToggleDetails() {
+  if(detailsSource==null)return;
+  if(detailsPanel==null)BuildDetails();
+  var panel=detailsPanel;
+  bool open=!panel.Visible;
+  MinimumSize=Size.Empty;MaximumSize=Size.Empty;
+  int shift=open?detailsShift:-detailsShift;
+  foreach(var b in buttonList)b.Top+=shift;
+  ClientSize=new Size(ClientSize.Width,ClientSize.Height+shift);
+  panel.Visible=open;
+  detailsLabel.Text=open?"Weniger":detailsLinkText;
+  if(open){detailsBox.SelectionStart=0;detailsBox.SelectionLength=0;}
+  MinimumSize=Size;MaximumSize=Size;
+ }
+
+ // Gesamtliste beim ersten Aufklappen erzeugen: graues Feld (höchstens 240 hoch, sonst Bildlauf)
+ void BuildDetails() {
+  string body;
+  try {body=detailsSource()??"";} catch(Exception ex){body=ex.Message;}
+  body=body.Replace("\r\n","\n").Replace("\n","\r\n");
+  var flags=TextFormatFlags.WordBreak|TextFormatFlags.NoPrefix|TextFormatFlags.TextBoxControl;
+  int inner=TextRenderer.MeasureText(body,Font,new Size(detailsWidth-Ui.Px(16)-SystemInformation.VerticalScrollBarWidth,0),flags).Height;
+  int boxHeight=Math.Min(Ui.Px(240),inner+Ui.Px(12));
+  detailsPanel=new Panel{BackColor=Ui.Surface,Location=new Point(detailsX,detailsY),Size=new Size(detailsWidth,boxHeight),Visible=false};
+  detailsBox=new TextBox{Multiline=true,ReadOnly=true,ScrollBars=inner+Ui.Px(12)>boxHeight?ScrollBars.Vertical:ScrollBars.None,
+   BorderStyle=BorderStyle.None,WordWrap=true,Text=body,BackColor=Ui.Surface,ForeColor=Ui.TextColor,Font=Font,TabStop=false,
+   Location=new Point(Ui.Px(8),Ui.Px(6)),Size=new Size(detailsWidth-Ui.Px(8),boxHeight-Ui.Px(12))};
+  detailsPanel.Controls.Add(detailsBox);
+  Controls.Add(detailsPanel);
+  detailsShift=boxHeight+Ui.Px(8);
  }
 
  static KeyValuePair<string,DialogResult> Pair(string text,DialogResult result){return new KeyValuePair<string,DialogResult>(text,result);}

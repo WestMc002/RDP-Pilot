@@ -123,7 +123,21 @@ static class UpdateCheck {
 
  // Arbeitsordner für Download und Hilfsskript
  public static string Folder {get {return Path.Combine(Path.GetTempPath(),"RDP-Pilot-Update");}}
+ // Ergebnis bis 1.55: eine gemeinsame Datei für alle Installationen (nur noch für den Neustart nach einem Update,
+ // das ein 1.55-Skript ausgeführt hat)
  public static string LogFile {get {return Path.Combine(Folder,"Update.log");}}
+ // Ergebnis ab 1.56: je Installationsziel und Versuch eine eigene Datei; die Versuchskennung (32 Hex-Zeichen) gibt
+ // der Neustart mit --nach-update an RDP Pilot weiter
+ static string LogFor(string attemptId){return Path.Combine(Folder,"Update-"+TargetId+"-"+attemptId+".log");}
+ // Startbestätigung für den Neustarthelfer: Prozess-ID des erhöhten Skripts oder "ABBRUCH"
+ static string StartFileFor(string attemptId){return Path.Combine(Folder,TargetId+"-"+attemptId+".start");}
+ // Bereitschaft des Neustarthelfers und Freigabe für das erhöhte Skript (je Versuch)
+ static string ReadyFileFor(string attemptId){return Path.Combine(Folder,TargetId+"-"+attemptId+".bereit");}
+ static string ReleaseFileFor(string attemptId){return Path.Combine(Folder,TargetId+"-"+attemptId+".freigabe");}
+ static string AckFileFor(string attemptId){return Path.Combine(Folder,TargetId+"-"+attemptId+".empfangen");}
+ // Startzeit dieser Instanz (UTC-Ticks): Skripte erkennen die alte Instanz an Prozess-ID und Startzeit
+ static long ProcessStartTicks {get {try {return Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;} catch {return 0;}}}
+ static bool IsAttemptId(string id){return id!=null&&Regex.IsMatch(id,"^[0-9a-f]{32}$");}
 
  static string UserAgent {get {return "RDP-Pilot/"+AppInfo.Version;}} // GitHub verlangt einen User-Agent
 
@@ -402,11 +416,11 @@ static class UpdateCheck {
   }
  }
 
+ // Schreibprobe mit Zufallsnamen, CreateNew und DeleteOnClose: berührt nie eine vorhandene Datei
  static bool CanWrite(string dir) {
   try {
-   string probe=Path.Combine(dir,"~update-test.tmp");
-   File.WriteAllText(probe,"");
-   File.Delete(probe);
+   string probe=Path.Combine(dir,".schreibprobe-"+Guid.NewGuid().ToString("N")+".tmp");
+   using(new FileStream(probe,FileMode.CreateNew,FileAccess.Write,FileShare.None,1,FileOptions.DeleteOnClose)) {}
    return true;
   } catch {return false;}
  }
@@ -472,7 +486,8 @@ static class UpdateCheck {
   if(PendingRestore()!=null)throw new Exception(PendingText);
   // eigener Arbeitsordner je Versuch; der Name beginnt mit der Zielkennung, damit die Sperrprüfung nur Ordner
   // dieses Installationsziels betrachtet
-  string attempt=Path.Combine(Folder,TargetId+"-"+Guid.NewGuid().ToString("N"));
+  string attemptId=Guid.NewGuid().ToString("N");
+  string attempt=Path.Combine(Folder,TargetId+"-"+attemptId);
   Directory.CreateDirectory(attempt);
   string zip=Path.Combine(attempt,AssetName(release.Version));
   // Download begrenzen: höchstens die von GitHub genannte Größe, in jedem Fall höchstens 64 MB
@@ -492,7 +507,7 @@ static class UpdateCheck {
    throw Fail("Download beschädigt.","Die Prüfsumme (SHA-256) der heruntergeladenen Datei stimmt nicht mit dem signierten Manifest überein.\r\n"+
     "Erwartet: "+release.Sha256+"\r\nErhalten: "+hash);
   }
-  try {File.Delete(LogFile);} catch {}
+  string logFile=LogFor(attemptId);
   string exe=Application.ExecutablePath;
   bool elevated=!CanWrite(Path.GetDirectoryName(exe));
   // Erhöht: eigener, nicht vorhersagbarer Arbeitsordner direkt unter ProgramData, den das Skript nur für
@@ -518,7 +533,13 @@ static class UpdateCheck {
   Var(vars,"LockName",LockName);
   Var(vars,"TargetId",TargetId);
   Var(vars,"TempRoot",Folder);
-  Var(vars,"Log",LogFile);
+  Var(vars,"Log",logFile);
+  Var(vars,"SharedLog","");
+  vars.Append("$LegacyFallback = $false\n");
+  Var(vars,"AttemptId",attemptId);
+  Var(vars,"ReleaseId",attemptId);
+  Var(vars,"ReleaseFile",elevated?ReleaseFileFor(attemptId):"");
+  vars.Append("$ProcessStart = ").Append(ProcessStartTicks).Append("\n");
   Var(vars,"Work",work);
   Var(vars,"ExeName",ExeName);
   Var(vars,"ManualName",ManualName);
@@ -535,32 +556,96 @@ static class UpdateCheck {
   Var(vars,"ScriptFile",scriptFile);
   Var(vars,"ScriptHash",scriptHash);
   var start=PowerShell(vars+InstallLoader);
-  // Programmordner ohne Schreibrechte (z. B. unter Programme): Skript mit Administratorrechten starten
-  if(elevated)start.Verb="runas";
-  Process installer;
-  try {installer=Process.Start(start);}
-  catch(System.ComponentModel.Win32Exception ex) {
-   if(ex.NativeErrorCode==1223)throw new Exception("Update abgebrochen (Administratorrechte nicht erteilt).");
-   throw;
+  if(!elevated) {
+   Process.Start(start);
+   return;
   }
-  if(!elevated)return;
-  // Neustart mit normalen Rechten: Ein nicht erhöhter Prozess wartet auf das Ende des Updates, übernimmt das
-  // Ergebnis nach Update.log und startet RDP Pilot – sonst liefe es danach mit Administratorrechten.
-  StartRestartHelper(pid,installer,attempt,exe,work);
+  // Programmordner ohne Schreibrechte (z. B. unter Programme): Skript mit Administratorrechten starten.
+  // Zuerst den Neustarthelfer (normale Rechte) – scheitert sein Start, wird nichts Erhöhtes gestartet.
+  StartElevated(start,pid,attempt,exe,work,attemptId,"Update",logFile);
  }
 
- static void StartRestartHelper(int pid,Process installer,string attempt,string exe,string work) {
-  int installerId=0;
-  try {if(installer!=null)installerId=installer.Id;} catch {}
+ // Ablauf mit Administratorrechten: 1. Neustarthelfer (normale Rechte) starten und auf seine Bereitschaft warten,
+ // 2. erhöhtes Skript starten, 3. dessen Prozess-ID als Startbestätigung für den Helfer schreiben, 4. Freigabe für
+ // genau diesen Versuch schreiben. Das erhöhte Skript ändert erst nach dem Programmende und nur mit Freigabe etwas;
+ // scheitert ein Schritt, fehlt die Freigabe und es bricht ohne Änderung ab.
+ static void StartElevated(ProcessStartInfo start,int pid,string attempt,string exe,string work,string attemptId,string what,string helperLog) {
+  string startFile=StartFileFor(attemptId),readyFile=ReadyFileFor(attemptId),releaseFile=ReleaseFileFor(attemptId),ackFile=AckFileFor(attemptId);
+  foreach(string f in new[]{startFile,readyFile,releaseFile,ackFile})try {File.Delete(f);} catch {}
+  string failed=what+" nicht gestartet: Der Neustart konnte nicht vorbereitet werden. Es wurde nichts verändert.";
+  Process helper=StartRestartHelper(pid,attempt,exe,work,attemptId,startFile,readyFile,ackFile,helperLog);
+  var until=DateTime.UtcNow.AddSeconds(20);
+  while(!File.Exists(readyFile)) {
+   bool exited=true;
+   try {exited=helper==null||helper.HasExited;} catch {}
+   if(exited||DateTime.UtcNow>until) {
+    try {if(!exited)helper.Kill();} catch {}
+    throw new Exception(failed);
+   }
+   Thread.Sleep(100);
+  }
+  start.Verb="runas";
+  Process elevatedProcess;
+  try {elevatedProcess=Process.Start(start);}
+  catch(System.ComponentModel.Win32Exception ex) {
+   WriteStartFile(startFile,"ABBRUCH");
+   if(ex.NativeErrorCode==1223)throw new Exception(what+" abgebrochen (Administratorrechte nicht erteilt).");
+   throw;
+  }
+  catch {WriteStartFile(startFile,"ABBRUCH");throw;}
+  int id=0;
+  try {if(elevatedProcess!=null)id=elevatedProcess.Id;} catch {}
+  if(id<=0||!WriteStartFile(startFile,id.ToString())) {
+   WriteStartFile(startFile,"ABBRUCH");
+   throw new Exception(failed);
+  }
+  // Zweite Bestätigung: Der Helfer hat die Prozess-ID empfangen und hält einen Handle darauf. Bis dahin bleibt der
+  // Handle in elevatedProcess offen, die Prozess-ID kann also nicht neu vergeben werden.
+  until=DateTime.UtcNow.AddSeconds(30);
+  while(true) {
+   string ack=null;
+   try {if(File.Exists(ackFile))ack=File.ReadAllText(ackFile).Trim();} catch {}
+   if(ack==id.ToString())break;
+   bool exited=true;
+   try {exited=helper.HasExited;} catch {}
+   if(exited||DateTime.UtcNow>until)throw new Exception(failed); // ohne Freigabe: das Skript bricht ohne Änderung ab
+   Thread.Sleep(100);
+  }
+  bool helperGone=true;
+  try {helperGone=helper.HasExited;} catch {}
+  if(helperGone)throw new Exception(failed);
+  // Freigabe zuletzt: fehlt sie, bricht das erhöhte Skript nach dem Programmende ohne Änderung ab
+  if(!WriteStartFile(releaseFile,attemptId))throw new Exception(failed);
+  GC.KeepAlive(elevatedProcess);
+ }
+
+ static bool WriteStartFile(string file,string text) {
+  try {
+   string tmp=file+".tmp";
+   File.WriteAllText(tmp,text,new UTF8Encoding(false));
+   if(File.Exists(file))File.Delete(file);
+   File.Move(tmp,file);
+   return true;
+  } catch {return false;}
+ }
+
+ static Process StartRestartHelper(int pid,string attempt,string exe,string work,string attemptId,string startFile,string readyFile,string ackFile,string log) {
   var r=new StringBuilder();
   r.Append("$ProcessId = ").Append(pid).Append("\n");
-  r.Append("$Installer = ").Append(installerId).Append("\n");
+  r.Append("$ProcessStart = ").Append(ProcessStartTicks).Append("\n");
   Var(r,"Attempt",attempt);
   Var(r,"Exe",exe);
-  Var(r,"Log",LogFile);
+  Var(r,"Log",log);
   Var(r,"Work",work);
+  // Wiederherstellung (attempt leer): die wiederhergestellte EXE kann älter sein; Start-Program prüft ihre Version
+  Var(r,"AttemptId",attemptId);
+  r.Append("$LegacyFallback = $").Append(String.IsNullOrEmpty(attempt)?"true":"false").Append("\n");
+  Var(r,"StartFile",startFile);
+  Var(r,"ReadyFile",readyFile);
+  Var(r,"AckFile",ackFile);
+  Var(r,"SharedLog",String.IsNullOrEmpty(attempt)?LogFile:"");
   r.Append("$Tray = $false\n");
-  Process.Start(PowerShell(r+RestartScript));
+  return Process.Start(PowerShell(r+RestartScript));
  }
 
  // --- Nicht abgeschlossenes Update (Globale Richtlinien, Selbst-Update › Offene Wiederherstellung) ---------------
@@ -629,35 +714,138 @@ static class UpdateCheck {
   }
  }
 
- // Wiederherstellungsjournal prüfen: true, wenn jede eingetragene Datei noch der Sicherung entspricht bzw. bei
- // "Neu" nicht vorhanden ist (das Update hat dann nichts verändert). Übrig gebliebene Hilfsdateien werden entfernt.
+ // Eintrag "Vorher" im Wiederherstellungsjournal
+ class JournalEntry {public string N,Kind,Dst,Hash,Tmp;}
+
+ // Formate des Wiederherstellungsjournals – alle drei werden ausdrücklich unterschieden, alles andere gilt als
+ // unbekannt (Ordner und Sicherungen bleiben erhalten):
+ // - Format 2 (ab 1.56): Merker "Journalformat 2" + Alt-Ordner; Journal mit Formatzeile, "Geplant 1..n", "Bereit",
+ //   Sicherungen mit SHA-256, "Ersetzt k" direkt nach "Vorher k" (Pflicht). Journal entsteht vor dem Merker.
+ // - Format 1.55: Merker nur Alt-Ordner; Journal mit "Bereit" (ohne Formatzeile und Plan), Sicherungen mit SHA-256,
+ //   "Ersetzt" kann fehlen. Journal entsteht vor dem Merker.
+ // - Format 1.54: Merker nur Alt-Ordner; Journal ohne "Bereit", Sicherungen ohne Prüfsumme, "Ersetzt" kann fehlen.
+ //   Der Merker entstand vor dem Journal.
+ // Fehlt bei einem Merker im alten Aufbau das Journal, lässt sich 1.54 (nichts verändert) nicht von einem
+ // beschädigten 1.55-Stand unterscheiden: Stand ungeklärt.
+ const string JournalFormat="Journalformat 2";
+ enum MarkerKind {Unknown,Legacy,Format2}
+
+ // Merker lesen: Format 2 = erste Zeile "Journalformat 2", zweite der Alt-Ordner; alter Aufbau = genau eine Zeile mit
+ // dem Alt-Ordner. Lesefehler, zu groß oder anderer Inhalt: Unknown.
+ static MarkerKind ReadMarker(string dir) {
+  try {
+   string marker=Path.Combine(dir,PendingMarker);
+   if(new FileInfo(marker).Length>4096)return MarkerKind.Unknown;
+   var lines=File.ReadAllLines(marker,Encoding.UTF8).Select(l=>l.Trim().TrimStart('\uFEFF')).Where(l=>l.Length>0).ToList();
+   string alt=Path.Combine(dir,"Alt");
+   if(lines.Count==2&&lines[0]==JournalFormat&&String.Equals(lines[1],alt,StringComparison.OrdinalIgnoreCase))return MarkerKind.Format2;
+   if(lines.Count==1&&String.Equals(lines[0],alt,StringComparison.OrdinalIgnoreCase))return MarkerKind.Legacy;
+  } catch {}
+  return MarkerKind.Unknown;
+ }
+
+ // Journal streng prüfen – dieselben Regeln wie im Reparatur-Skript. false = Stand ungeklärt (nichts aufräumen,
+ // Wiederherstellung endet mit OFFEN). Bei true enthält entries alle "Vorher"-Einträge in Reihenfolge.
+ static bool ReadJournal(string dir,out List<JournalEntry> entries) {
+  entries=null;
+  string exe=Application.ExecutablePath;
+  string manual=Path.Combine(Path.GetDirectoryName(exe),ManualName);
+  Func<string,bool> allowed=d=>String.Equals(d,exe,StringComparison.OrdinalIgnoreCase)||String.Equals(d,manual,StringComparison.OrdinalIgnoreCase);
+  var kind=ReadMarker(dir);
+  if(kind==MarkerKind.Unknown)return false;
+  string journal=Path.Combine(dir,"Wiederherstellung.txt");
+  if(!File.Exists(journal)||new FileInfo(journal).Length>64*1024)return false;
+  string[] lines=File.ReadAllLines(journal,Encoding.UTF8);
+  if(lines.Length<2||!lines[0].StartsWith("RDP Pilot ",StringComparison.Ordinal)||!lines[0].EndsWith(" - Wiederherstellungsjournal",StringComparison.Ordinal))return false;
+  bool format2=kind==MarkerKind.Format2;
+  bool format155=!format2&&lines.Contains("Bereit");
+  bool withHash=format2||format155;
+  var planned=new List<string>();
+  var list=new List<JournalEntry>();
+  int i=1;
+  if(format2) {
+   if(lines[1]!=JournalFormat)return false;
+   i=2;
+  }
+  // Erklärtext bis zur ersten Zeile mit Schlüsselwort
+  string first=format2?"Geplant ":format155?"Bereit":"Vorher ";
+  while(i<lines.Length&&!lines[i].StartsWith(first,StringComparison.Ordinal)) {
+   if(IsJournalKeyword(lines[i]))return false;
+   i++;
+  }
+  if(format2) {
+   for(;i<lines.Length&&lines[i].StartsWith("Geplant ",StringComparison.Ordinal);i++) {
+    var g=Regex.Match(lines[i],@"^Geplant (\d+): Ziel: (.+)$");
+    if(!g.Success||g.Groups[1].Value!=(planned.Count+1).ToString()||!allowed(g.Groups[2].Value))return false;
+    if(planned.Any(x=>String.Equals(x,g.Groups[2].Value,StringComparison.OrdinalIgnoreCase)))return false;
+    planned.Add(g.Groups[2].Value);
+   }
+   if(planned.Count==0)return false;
+  }
+  if(withHash) {
+   if(i>=lines.Length||lines[i]!="Bereit")return false;
+   i++;
+  }
+  bool replacedLast=true;
+  for(;i<lines.Length;i++) {
+   string line=lines[i];
+   var e=Regex.Match(line,@"^Ersetzt (\d+)$");
+   if(e.Success) {
+    if(list.Count==0||replacedLast||e.Groups[1].Value!=list[list.Count-1].N)return false;
+    replacedLast=true;
+    continue;
+   }
+   var m=withHash
+    ?Regex.Match(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)(?: \| Sicherungsdatei: .+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: (.+)$")
+    :Regex.Match(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)()(?: \| Sicherungsdatei: .+?)? \| Hilfsdatei: (.+)$");
+   if(!m.Success)return false;
+   var entry=new JournalEntry{N=m.Groups[1].Value,Kind=m.Groups[2].Value,Dst=m.Groups[3].Value,Hash=m.Groups[4].Value,Tmp=m.Groups[5].Value};
+   // fortlaufend ab 1; nur im Format 2 muss die vorige Datei bestätigt sein ("Ersetzt" wird dort mit Abbruch bei
+   // Fehler geschrieben, eine fehlende Zeile bedeutet also ein beschädigtes Journal)
+   if(entry.N!=(list.Count+1).ToString()||(format2&&list.Count>0&&!replacedLast)||!allowed(entry.Dst))return false;
+   if(withHash) {
+    if(entry.Kind=="Sicherung"&&entry.Hash.Length==0)return false;
+    if(entry.Kind=="Neu"&&line.Contains(" | Sicherungsdatei: "))return false;
+   }
+   if(format2&&(list.Count>=planned.Count||!String.Equals(planned[list.Count],entry.Dst,StringComparison.OrdinalIgnoreCase)))return false;
+   // je Ziel höchstens eine "Vorher"-Zeile; ein doppeltes Ziel macht das Journal widersprüchlich
+   if(list.Any(x=>String.Equals(x.Dst,entry.Dst,StringComparison.OrdinalIgnoreCase)))return false;
+   list.Add(entry);
+   replacedLast=false;
+  }
+  entries=list;
+  return true;
+ }
+
+ static bool IsJournalKeyword(string line) {
+  return line=="Bereit"||line==JournalFormat||line.StartsWith("Geplant ",StringComparison.Ordinal)||
+   line.StartsWith("Vorher ",StringComparison.Ordinal)||line.StartsWith("Ersetzt ",StringComparison.Ordinal);
+ }
+
+ // Wiederherstellungsjournal prüfen: true, wenn das Journal die strenge Prüfung besteht und jede eingetragene Datei
+ // noch der Sicherung entspricht bzw. bei "Neu" nicht vorhanden ist (das Update hat dann nichts verändert).
+ // Übrig gebliebene Hilfsdateien werden erst danach entfernt. Im Zweifel bleibt der Arbeitsordner erhalten.
  static bool NothingToRestore(string dir) {
   try {
-   string exe=Application.ExecutablePath;
-   string target=Path.GetDirectoryName(exe);
-   string journal=Path.Combine(dir,"Wiederherstellung.txt");
-   // Das Journal entsteht vor dem Merker und endet vor dem ersten Austausch mit "Bereit". Fehlt es oder ist es
-   // unvollständig, ist der Stand unbekannt: nicht still aufräumen, sondern per Rückfrage wiederherstellen.
-   if(!File.Exists(journal)||new FileInfo(journal).Length>64*1024)return false;
-   string[] lines=File.ReadAllLines(journal,Encoding.UTF8);
-   if(!lines.Any(l=>l=="Bereit"))return false;
-   foreach(string line in lines) {
-    if(!line.StartsWith("Vorher ",StringComparison.Ordinal))continue;
-    var m=Regex.Match(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)(?: \| Sicherungsdatei: .+? \| SHA256: [0-9A-F]{64})? \| Hilfsdatei: (.+)$");
-    if(!m.Success)return false;
-    string dst=m.Groups[3].Value,tmp=m.Groups[4].Value;
-    if(!String.Equals(dst,exe,StringComparison.OrdinalIgnoreCase)&&
-       !String.Equals(dst,Path.Combine(target,ManualName),StringComparison.OrdinalIgnoreCase))return false;
-    if(m.Groups[2].Value=="Sicherung") {
-     string bak=Path.Combine(Path.Combine(dir,"Alt"),m.Groups[1].Value);
-     if(!File.Exists(bak)||!File.Exists(dst)||Sha256(bak)!=Sha256(dst))return false;
+   string target=Path.GetDirectoryName(Application.ExecutablePath);
+   List<JournalEntry> entries;
+   if(!ReadJournal(dir,out entries))return false;
+   foreach(var e in entries) {
+    if(e.Kind=="Sicherung") {
+     string bak=Path.Combine(Path.Combine(dir,"Alt"),e.N);
+     // Stromausfall zwischen Kopie und Umbenennen: .teil nur mit Prüfsumme aus dem Journal (unten verglichen)
+     if(!File.Exists(bak)&&e.Hash.Length>0&&File.Exists(bak+".teil"))bak+=".teil";
+     if(!File.Exists(bak)||!File.Exists(e.Dst))return false;
+     string hash=Sha256(bak);
+     if((e.Hash.Length>0&&hash!=e.Hash)||hash!=Sha256(e.Dst))return false;
     }
-    else if(File.Exists(dst))return false;
-    // Hilfsdatei nur im Programmordner und mit dem erwarteten Namen entfernen
-    if(String.Equals(Path.GetDirectoryName(tmp),target,StringComparison.OrdinalIgnoreCase)&&
-       Path.GetFileName(tmp).StartsWith("."+Path.GetFileName(dst)+".update-",StringComparison.OrdinalIgnoreCase))
-     try {if(File.Exists(tmp))File.Delete(tmp);} catch {}
+    else if(File.Exists(e.Dst))return false;
    }
+   foreach(var e in entries)
+    // Hilfsdatei nur im Programmordner und mit dem erwarteten Namen entfernen
+    if(String.Equals(Path.GetDirectoryName(e.Tmp),target,StringComparison.OrdinalIgnoreCase)&&
+       Path.GetFileName(e.Tmp).StartsWith("."+Path.GetFileName(e.Dst)+".update-",StringComparison.OrdinalIgnoreCase))
+     try {if(File.Exists(e.Tmp))File.Delete(e.Tmp);} catch {}
    return true;
   } catch {return false;}
  }
@@ -667,6 +855,12 @@ static class UpdateCheck {
  public static bool OfferRepair(IWin32Window owner) {
   // im Projektordner (Erstellen.bat neben der EXE) wird nie etwas zurückgesetzt, wie beim Update
   if(InProjectFolder)return false;
+  // nie aus einer Instanz mit Administratorrechten (sonst liefe die Reparatur mit geerbten Rechten)
+  if(IsElevated) {
+   MessageBox.Show(owner,AppInfo.FullName+" läuft gerade mit Administratorrechten. Bitte "+AppInfo.FullName+" normal starten und dann aktualisieren.",
+    AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Information);
+   return false;
+  }
   // erst unter der Sperre aufräumen, was nichts verändert hat; ist sie belegt, läuft gerade ein Update
   if(!WithTargetLock(CleanupLocked)) {
    MessageBox.Show(owner,Running,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Information);
@@ -687,6 +881,7 @@ static class UpdateCheck {
 
  static void Repair(string dir) {
   if(InProjectFolder)throw new Exception("Im Projektordner wird nichts zurückgesetzt.");
+  if(IsElevated)throw new Exception(AppInfo.FullName+" läuft gerade mit Administratorrechten.");
   string data=Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
   bool protectedDir=String.Equals(Path.GetDirectoryName(dir),data,StringComparison.OrdinalIgnoreCase);
   string exe=Application.ExecutablePath;
@@ -696,29 +891,43 @@ static class UpdateCheck {
   if(!protectedDir&&!writable)
    throw new Exception("Die vorherige Version lässt sich nicht automatisch wiederherstellen. Bitte "+AppInfo.FullName+" neu herunterladen.");
   bool elevated=protectedDir;
-  try {File.Delete(LogFile);} catch {}
+  string attemptId=Guid.NewGuid().ToString("N");
   int pid=Process.GetCurrentProcess().Id;
   var vars=new StringBuilder();
   vars.Append("$ProcessId = ").Append(pid).Append("\n");
+  // Die wiederhergestellte EXE kann älter als 1.56 sein: Start-Program prüft ihre Version. Ab 1.56 mit Kennung und
+  // eigener Ergebnisdatei, sonst ohne Kennung und mit Kopie in die gemeinsame Update.log
+  Var(vars,"AttemptId",attemptId);
+  vars.Append("$LegacyFallback = $true\n");
+  Var(vars,"ReleaseId",attemptId);
+  Var(vars,"ReleaseFile",elevated?ReleaseFileFor(attemptId):"");
+  vars.Append("$ProcessStart = ").Append(ProcessStartTicks).Append("\n");
   Var(vars,"Work",dir);
   Var(vars,"Exe",exe);
   Var(vars,"ManualName",ManualName);
   Var(vars,"LockName",LockName);
   Var(vars,"TargetId",TargetId);
-  Var(vars,"Log",LogFile);
+  Var(vars,"Log",LogFor(attemptId));
+  Var(vars,"SharedLog",LogFile);
   vars.Append("$Elevated = $").Append(elevated?"true":"false").Append("\n");
   vars.Append("$Tray = $false\n");
-  var start=PowerShell(vars+RepairScript);
-  if(elevated)start.Verb="runas";
-  Process repairer;
-  try {repairer=Process.Start(start);}
-  catch(System.ComponentModel.Win32Exception ex) {
-   if(ex.NativeErrorCode==1223)throw new Exception("Wiederherstellung abgebrochen (Administratorrechte nicht erteilt).");
-   throw;
+  // Reparatur-Skript als Datei im Temp-Ordner, auf der Befehlszeile nur Lader, Werte und SHA-256 (wie beim Update):
+  // Ein Austausch der Datei bleibt wirkungslos, und die Befehlszeile bleibt auch bei langen Pfaden kurz.
+  Directory.CreateDirectory(Folder);
+  byte[] body=new UTF8Encoding(false).GetBytes(Compact(RepairScript));
+  string scriptFile=Path.Combine(Folder,"Reparatur-Skript-"+Guid.NewGuid().ToString("N")+".txt");
+  File.WriteAllBytes(scriptFile,body);
+  string scriptHash;
+  using(var h=SHA256.Create())scriptHash=BitConverter.ToString(h.ComputeHash(body)).Replace("-","");
+  Var(vars,"ScriptFile",scriptFile);
+  Var(vars,"ScriptHash",scriptHash);
+  var start=PowerShell(vars+RepairLoader);
+  if(!elevated) {
+   Process.Start(start);
+   return;
   }
-  if(!elevated)return;
   // Neustart mit normalen Rechten über den Neustarthelfer (liest das Ergebnis aus dem geschützten Ordner)
-  StartRestartHelper(pid,repairer,"",exe,dir);
+  StartElevated(start,pid,"",exe,dir,attemptId,"Wiederherstellung",LogFor(attemptId));
  }
 
  // Arbeitsordner abgebrochener Versuche (älter als ein Tag) im Temp-Ordner entfernen; Ordner mit offener
@@ -732,6 +941,10 @@ static class UpdateCheck {
     if(di.LastWriteTimeUtc<DateTime.UtcNow.AddDays(-1))try {di.Delete(true);} catch {}
    }
    try {File.Delete(Path.Combine(Folder,"Update.ps1"));} catch {} // Hilfsskript bis 1.52
+   // Reparatur-Skripte, Startbestätigungen und nicht abgeholte Ergebnisse dieses Ziels nach einem Tag entfernen
+   foreach(string pattern in new[]{"Reparatur-Skript-*.txt",TargetId+"-*.start",TargetId+"-*.bereit",TargetId+"-*.freigabe",TargetId+"-*.empfangen",TargetId+"-*.tmp","Update-"+TargetId+"-*.log"})
+    foreach(string f in Directory.GetFiles(Folder,pattern))
+     try {if(File.GetLastWriteTimeUtc(f)<DateTime.UtcNow.AddDays(-1))File.Delete(f);} catch {}
    foreach(string f in Directory.GetFiles(Folder,"RDP-Pilot-*.zip"))try {File.Delete(f);} catch {} // Downloads bis 1.53
   } catch {}
  }
@@ -774,13 +987,19 @@ static class UpdateCheck {
 
  // Ergebnis des letzten Updates ("OK x", "FEHLER …", "ZURUECK …", "OFFEN …") nach dem Neustart mit --nach-update
  // Das Ergebnis ist eine kurze Zeile: höchstens 16 KB lesen (ein größerer Inhalt gilt als unbekanntes Ergebnis)
- public static string LastResult() {
+ // attemptId: Versuchskennung aus --nach-update (ab 1.56); ohne Kennung die gemeinsame Datei bis 1.55. Nur das
+ // Ergebnis genau dieses Versuchs und dieses Installationsziels wird gelesen und danach entfernt.
+ public static string LastResult(string attemptId) {
+  string file=IsAttemptId(attemptId)?LogFor(attemptId):LogFile;
   try {
-   if(!File.Exists(LogFile))return null;
-   using(var fs=new FileStream(LogFile,FileMode.Open,FileAccess.Read,FileShare.Read)) {
-    if(fs.Length>16*1024)return "FEHLER Ergebnis des Updates unlesbar (Update.log zu groß).";
-    return Encoding.UTF8.GetString(ReadLimited(fs,16*1024)).Trim().TrimStart('\uFEFF');
+   if(!File.Exists(file))return null;
+   string text;
+   using(var fs=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.Read)) {
+    if(fs.Length>16*1024)text="FEHLER Ergebnis des Updates unlesbar (Update.log zu groß).";
+    else text=Encoding.UTF8.GetString(ReadLimited(fs,16*1024)).Trim().TrimStart('\uFEFF');
    }
+   try {File.Delete(file);} catch {}
+   return text;
   } catch {return null;}
  }
 
@@ -799,6 +1018,25 @@ static class UpdateCheck {
  // RestartScript: Neustart nach einem Update mit Administratorrechten, selbst mit normalen Rechten
  //   ($ProcessId, $Installer, $Attempt, $Exe, $Log, $Work, $Tray); startet nur bei OK/FEHLER/ZURUECK ohne Merker.
  const string InstallLoader=@"
+# alte Instanz an Prozess-ID und Startzeit erkennen (eine wiederverwendete Prozess-ID gilt nicht als alte Instanz)
+function Test-OldInstance {
+  $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if (-not $p) { return $false }
+  if ($ProcessStart -gt 0) { try { return ($p.StartTime.ToUniversalTime().Ticks -eq $ProcessStart) } catch { return $true } }
+  return $true
+}
+# Neustart mit --nach-update und Versuchskennung. Nach einer Wiederherstellung ($LegacyFallback) kann die EXE aelter
+# als 1.56 sein und kennt keine Kennung: Dann nur --nach-update, und das Ergebnis wird erst unmittelbar vor dem Start
+# in die gemeinsame Datei kopiert, die aeltere Fassungen lesen ($SharedLog).
+function Start-Program([bool]$tray) {
+  $a = @('--nach-update')
+  $modern = $true
+  if ($LegacyFallback) { try { $modern = ([Version][System.Diagnostics.FileVersionInfo]::GetVersionInfo($Exe).FileVersion) -ge [Version]'1.56' } catch { $modern = $false } }
+  if ($modern -and $AttemptId) { $a += $AttemptId }
+  elseif ($SharedLog -and (Test-Path -LiteralPath $Log)) { try { Copy-Item -LiteralPath $Log -Destination $SharedLog -Force } catch {} }
+  if ($tray) { $a += '/tray' }
+  Start-Process -FilePath $Exe -ArgumentList $a
+}
 $ErrorActionPreference = 'Stop'
 # geschuetzten Arbeitsordner anlegen: Besitzer Administratoren, schreiben nur SYSTEM und Administratoren, lesen angemeldete Benutzer
 function New-WorkFolder {
@@ -846,13 +1084,13 @@ try {
   } else {
     try { $msg | Out-File -LiteralPath $Log -Encoding utf8 } catch {}
     $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    while ((Test-OldInstance) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
     # nach der Frist erneut pruefen: laeuft die alte Instanz noch, nicht starten (der Start wuerde ohnehin abgefangen)
-    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+    if (Test-OldInstance) {
       try { ($msg + ' RDP Pilot wurde nicht neu gestartet, weil die alte Instanz noch laeuft.') | Out-File -LiteralPath $Log -Encoding utf8 } catch {}
     }
-    elseif ($Tray) { Start-Process -FilePath $Exe -ArgumentList '--nach-update','/tray' }
-    else { Start-Process -FilePath $Exe -ArgumentList '--nach-update' }
+    elseif ($Tray) { Start-Program $true }
+    else { Start-Program $false }
   }
   exit 1
 }
@@ -911,13 +1149,23 @@ try {
   $lock = New-Object System.Threading.Mutex($false, $LockName)
   try { $haveLock = $lock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $haveLock = $true }
   if (-not $haveLock) { throw 'Ein anderes Update laeuft gerade.' }
+  # tatsaechliches Token pruefen: erhoeht nur, wenn das Programm es so gestartet hat (geschuetzter Arbeitsordner)
+  $isAdmin = (New-Object System.Security.Principal.WindowsPrincipal([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+  if ($isAdmin -and -not $Elevated) { throw 'Das Update laeuft unerwartet mit Administratorrechten.' }
   # erst nach bestaetigtem Ende der alten Instanz Dateien aendern
   $deadline = (Get-Date).AddSeconds(60)
-  while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+  while (Test-OldInstance) {
     if ((Get-Date) -gt $deadline) { throw 'RDP Pilot wurde nicht beendet.' }
     Start-Sleep -Milliseconds 250
   }
   Start-Sleep -Milliseconds 500
+  # erhoeht: nur mit ausdruecklicher Freigabe fuer genau diesen Versuch. RDP Pilot erteilt sie erst, wenn der
+  # Neustarthelfer bereit ist und die Startbestaetigung geschrieben wurde; ohne Freigabe nichts veraendern.
+  if ($Elevated) {
+    $released = $false
+    try { if ((Get-Item -LiteralPath $ReleaseFile).Length -le 256) { $released = ([System.IO.File]::ReadAllText($ReleaseFile).Trim() -ceq $ReleaseId) } } catch {}
+    if (-not $released) { throw 'Das Update wurde nicht freigegeben.' }
+  }
   if ($Elevated) {
     $admins = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
     $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
@@ -1077,21 +1325,45 @@ try {
     }
   } catch { throw ('Offene Wiederherstellungen konnten nicht geprueft werden: ' + $_.Exception.Message) }
   if ($open) { throw ('Eine fruehere Wiederherstellung ist noch offen (' + $open + ').') }
+  # Wiederherstellungsdaten dauerhaft schreiben (WriteThrough + Flush auf den Datentraeger), bevor die zugehoerige
+  # Programmdatei ausgetauscht wird: Nach einem Stromausfall darf das Journal nie hinter dem Dateistand zurueckliegen.
+  function Write-Durable([string]$path, [string[]]$lines, [bool]$append) {
+    if ($append) { $mode = [System.IO.FileMode]::Append } else { $mode = [System.IO.FileMode]::CreateNew }
+    $fs = New-Object System.IO.FileStream($path, $mode, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read, 4096, [System.IO.FileOptions]::WriteThrough)
+    try {
+      $nl = [string][char]13 + [char]10
+      $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes(($lines -join $nl) + $nl)
+      $fs.Write($bytes, 0, $bytes.Length)
+      $fs.Flush($true)
+    } finally { $fs.Dispose() }
+  }
+  function Copy-Durable([string]$src, [string]$dst) {
+    $in = [System.IO.File]::Open($src, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+      $out = New-Object System.IO.FileStream($dst, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None, 81920, [System.IO.FileOptions]::WriteThrough)
+      try { $in.CopyTo($out); $out.Flush($true) } finally { $out.Dispose() }
+      if ((Get-Item -LiteralPath $dst).Length -ne $in.Length) { throw ('Sicherung von ' + $src + ' unvollstaendig.') }
+    } finally { $in.Dispose() }
+  }
   # Rueckfallkopien im eigenen Arbeitsordner, nicht neben den Programmdateien
   $alt = Join-Path $Work 'Alt'
   New-Item -ItemType Directory -Path $alt -Force | Out-Null
-  # Journal zuerst (endet mit ""Bereit""), dann der Status: Ein Status ohne vollstaendiges Journal gilt als beschaedigt.
+  # Journal zuerst (Format 2: geplante Dateien, dann ""Bereit""), dann der Status: Ein Status ohne vollstaendiges Journal gilt als beschaedigt.
   # Wiederherstellungsjournal: vor jedem Austausch Zielpfad, Sicherungsdatei und ob das Ziel vorher existierte
   $journal = Join-Path $Work 'Wiederherstellung.txt'
-  @(('RDP Pilot ' + $Version + ' - Wiederherstellungsjournal'),
+  $plan = @()
+  $k = 0
+  foreach ($p in $pairs) { $k++; $plan += ('Geplant ' + $k + ': Ziel: ' + $p[1]) }
+  $journalHead = @((('RDP Pilot ' + $Version + ' - Wiederherstellungsjournal'), 'Journalformat 2',
     'Jede Zeile ""Vorher"" gilt als moeglicherweise ueberschrieben, auch ohne folgende Zeile ""Ersetzt"" (Abbruch waehrend des Kopierens).',
     'Wiederherstellen fuer jede Zeile ""Vorher"": bei ""Sicherung"" die Sicherungsdatei auf das Ziel zurueckkopieren (sie ist vollstaendig), bei ""Neu"" die Zieldatei loeschen, falls vorhanden.',
     '""Ersetzt n"" bestaetigt nur, dass der Austausch dieser Datei abgeschlossen wurde. Eine uebrig gebliebene ""Hilfsdatei"" kann geloescht werden.',
-    '', 'Bereit') | Set-Content -LiteralPath $journal -Encoding utf8 -ErrorAction Stop
+    '') + $plan + @('Bereit'))
+  Write-Durable $journal $journalHead $false
   # Status vor dem ersten Ueberschreiben dauerhaft anlegen: bricht der Austausch ab (auch hart beendet), bleibt der
   # Arbeitsordner geschuetzt und neue Updates gesperrt. Laesst er sich nicht schreiben, wird nichts ausgetauscht.
   $pending = Join-Path $Work 'Wiederherstellung-offen'
-  $alt | Out-File -LiteralPath $pending -Encoding utf8 -ErrorAction Stop
+  Write-Durable $pending @('Journalformat 2', $alt) $false
   if (-not (Test-Path -LiteralPath $pending)) { throw 'Statusdatei konnte nicht angelegt werden.' }
   $done = @()
   $i = 0
@@ -1103,17 +1375,18 @@ try {
       $had = Test-Path -LiteralPath $p[1]
       if ($had) {
         # erst vollstaendig unter Hilfsnamen kopieren, dann umbenennen: vorhandene Sicherungsdatei = vollstaendig
-        Copy-Item -LiteralPath $p[1] -Destination ($bak + '.teil') -Force
+        Remove-Item -LiteralPath ($bak + '.teil') -Force -ErrorAction SilentlyContinue
+        Copy-Durable $p[1] ($bak + '.teil')
         Move-Item -LiteralPath ($bak + '.teil') -Destination $bak -Force
         $bakHash = (Get-FileHash -LiteralPath $bak -Algorithm SHA256).Hash
         $line = 'Vorher ' + $i + ': Sicherung | Ziel: ' + $p[1] + ' | Sicherungsdatei: ' + $bak + ' | SHA256: ' + $bakHash + ' | Hilfsdatei: ' + $tmp
       } else {
         $line = 'Vorher ' + $i + ': Neu | Ziel: ' + $p[1] + ' | Hilfsdatei: ' + $tmp
       }
-      Add-Content -LiteralPath $journal -Value $line -Encoding utf8 -ErrorAction Stop
+      Write-Durable $journal @($line) $true
       $done += ,@($p[1], $bak, $had)
       Write-Entry $p[0] $p[1] $tmp $p[2]
-      Add-Content -LiteralPath $journal -Value ('Ersetzt ' + $i) -Encoding utf8 -ErrorAction SilentlyContinue
+      Write-Durable $journal @('Ersetzt ' + $i) $true
     }
   } catch {
     # jede Datei einzeln zuruecksetzen, Fehler sammeln; bei unvollstaendiger Ruecksicherung Sicherung behalten und nicht neu starten
@@ -1160,12 +1433,63 @@ if ($Elevated) {
 if ($haveLock) { try { $lock.ReleaseMutex() } catch {} }
 if (-not $Elevated -and -not $noRestart) {
   # nur starten, wenn die alte Instanz beendet ist (z. B. nicht nach Ablauf der Wartefrist)
-  if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+  if (Test-OldInstance) {
     try { ($result + ' RDP Pilot wurde nicht neu gestartet, weil die alte Instanz noch laeuft.') | Out-File -LiteralPath $Log -Encoding utf8 } catch {}
   }
-  elseif ($Tray) { Start-Process -FilePath $Exe -ArgumentList '--nach-update','/tray' }
-  else { Start-Process -FilePath $Exe -ArgumentList '--nach-update' }
+  elseif ($Tray) { Start-Program $true }
+  else { Start-Program $false }
 }
+";
+
+ const string RepairLoader=@"
+# alte Instanz an Prozess-ID und Startzeit erkennen (eine wiederverwendete Prozess-ID gilt nicht als alte Instanz)
+function Test-OldInstance {
+  $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if (-not $p) { return $false }
+  if ($ProcessStart -gt 0) { try { return ($p.StartTime.ToUniversalTime().Ticks -eq $ProcessStart) } catch { return $true } }
+  return $true
+}
+# Neustart mit --nach-update und Versuchskennung. Nach einer Wiederherstellung ($LegacyFallback) kann die EXE aelter
+# als 1.56 sein und kennt keine Kennung: Dann nur --nach-update, und das Ergebnis wird erst unmittelbar vor dem Start
+# in die gemeinsame Datei kopiert, die aeltere Fassungen lesen ($SharedLog).
+function Start-Program([bool]$tray) {
+  $a = @('--nach-update')
+  $modern = $true
+  if ($LegacyFallback) { try { $modern = ([Version][System.Diagnostics.FileVersionInfo]::GetVersionInfo($Exe).FileVersion) -ge [Version]'1.56' } catch { $modern = $false } }
+  if ($modern -and $AttemptId) { $a += $AttemptId }
+  elseif ($SharedLog -and (Test-Path -LiteralPath $Log)) { try { Copy-Item -LiteralPath $Log -Destination $SharedLog -Force } catch {} }
+  if ($tray) { $a += '/tray' }
+  Start-Process -FilePath $Exe -ArgumentList $a
+}
+$code = $null
+try {
+  # hoechstens 256 KB lesen; waehrend des Lesens darf niemand schreiben (FileShare.Read)
+  $fs = [System.IO.File]::Open($ScriptFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+  try {
+    if ($fs.Length -gt 262144) { throw 'Das Reparatur-Skript ist zu gross.' }
+    $b = New-Object byte[] ([int]$fs.Length)
+    $n = 0
+    while ($n -lt $b.Length) { $k = $fs.Read($b, $n, $b.Length - $n); if ($k -le 0) { break }; $n += $k }
+    if ($n -ne $b.Length) { throw 'Das Reparatur-Skript ist unvollstaendig.' }
+  } finally { $fs.Dispose() }
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $h = [System.BitConverter]::ToString($sha.ComputeHash($b)).Replace('-', '')
+  $sha.Dispose()
+  if ($h -cne $ScriptHash) { throw 'Das Reparatur-Skript wurde veraendert.' }
+  $code = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($b)
+} catch {
+  # nichts veraendert. Erhoeht: ohne Update.log beenden (Neustarthelfer: Ergebnis unbekannt, kein Neustart).
+  # Ohne Adminrechte: FEHLER ins Protokoll und die bisherige Version wieder starten.
+  if (-not $Elevated) {
+    $msg = 'FEHLER Reparatur-Skript nicht geladen, nichts veraendert: ' + $_.Exception.Message
+    try { $msg | Out-File -LiteralPath $Log -Encoding utf8 } catch {}
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Test-OldInstance) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    if (-not (Test-OldInstance)) { Start-Program $false }
+  }
+  exit 1
+}
+. ([scriptblock]::Create($code))
 ";
 
  const string RepairScript=@"
@@ -1174,13 +1498,24 @@ $result = $null
 $noRestart = $false
 $haveLock = $false
 $lock = $null
+$workTrusted = $false
 $target = Split-Path $Exe -Parent
 try {
   $deadline = (Get-Date).AddSeconds(60)
-  while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-  if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) { throw 'RDP Pilot wurde nicht beendet.' }
+  while ((Test-OldInstance) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+  if (Test-OldInstance) { throw 'RDP Pilot wurde nicht beendet.' }
   # im Projektordner (Erstellen.bat neben der EXE) nie etwas zuruecksetzen
   if (Test-Path -LiteralPath (Join-Path $target 'Erstellen.bat')) { throw 'Im Projektordner wird nichts zurueckgesetzt.' }
+  # tatsaechliches Token pruefen: erhoeht nur, wenn das Programm es so gestartet hat
+  $isAdmin = (New-Object System.Security.Principal.WindowsPrincipal([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+  if ($isAdmin -and -not $Elevated) { throw 'Die Wiederherstellung laeuft unerwartet mit Administratorrechten.' }
+  # erhoeht: nur mit ausdruecklicher Freigabe fuer genau diesen Versuch. RDP Pilot erteilt sie erst, wenn der
+  # Neustarthelfer bereit ist und die Startbestaetigung geschrieben wurde; ohne Freigabe nichts veraendern.
+  if ($Elevated) {
+    $released = $false
+    try { if ((Get-Item -LiteralPath $ReleaseFile).Length -le 256) { $released = ([System.IO.File]::ReadAllText($ReleaseFile).Trim() -ceq $ReleaseId) } } catch {}
+    if (-not $released) { throw 'Die Wiederherstellung wurde nicht freigegeben.' }
+  }
   # dieselbe Sperre wie das Update: nie zwei Wiederherstellungen oder Update und Wiederherstellung gleichzeitig
   $lock = New-Object System.Threading.Mutex($false, $LockName)
   try { $haveLock = $lock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $haveLock = $true }
@@ -1234,39 +1569,87 @@ try {
   }
   $allowed = @($Exe, (Join-Path $target $ManualName))
   $journal = Join-Path $Work 'Wiederherstellung.txt'
-  # Journal vollstaendig pruefen, bevor irgendetwas zurueckgesetzt wird. Fehlt es, ist es zu gross, fehlt ""Bereit""
-  # oder passt ein Eintrag nicht: Stand unbekannt, Merker bleibt und es wird nicht neu gestartet (OFFEN).
+  # Journal vollstaendig und streng pruefen, bevor irgendetwas zurueckgesetzt wird (dieselben Regeln wie im Programm,
+  # ReadMarker/ReadJournal). Passt etwas nicht: Stand ungeklaert, Merker bleibt, kein Neustart (OFFEN).
+  # Drei Formate: Format 2 (Merker ""Journalformat 2"" + Alt-Ordner; Formatzeile, ""Geplant 1..n"", ""Bereit"", Hash,
+  # ""Ersetzt"" Pflicht), Format 1.55 (Merker nur Alt-Ordner; ""Bereit"", Hash, ""Ersetzt"" optional), Format 1.54
+  # (Merker nur Alt-Ordner; ohne ""Bereit"" und Hash). Unbekannter Merker oder fehlendes Journal: ungeklaert.
   $noRestart = $true
+  $markerFile = Join-Path $Work 'Wiederherstellung-offen'
+  Assert-Protected $markerFile
+  if ((Get-Item -LiteralPath $markerFile).Length -gt 4096) { throw 'Der Status ist zu gross.' }
+  $altDir = Join-Path $Work 'Alt'
+  $mlines = @([System.IO.File]::ReadAllLines($markerFile) | ForEach-Object { $_.Trim().TrimStart([char]0xFEFF) } | Where-Object { $_.Length -gt 0 })
+  if ($mlines.Count -eq 2 -and $mlines[0] -ceq 'Journalformat 2' -and $mlines[1] -eq $altDir) { $format2 = $true }
+  elseif ($mlines.Count -eq 1 -and $mlines[0] -eq $altDir) { $format2 = $false }
+  else { throw 'Der Status ist nicht lesbar.' }
+  $entries = @()
+  $keywords = '^(Bereit$|Journalformat 2$|Geplant |Vorher |Ersetzt )'
   if (-not (Test-Path -LiteralPath $journal -PathType Leaf)) { throw 'Das Wiederherstellungsjournal fehlt.' }
   Assert-Protected $journal
   if ((Get-Item -LiteralPath $journal).Length -gt 65536) { throw 'Das Wiederherstellungsjournal ist zu gross.' }
+  if (Test-Path -LiteralPath $altDir) { Assert-Protected $altDir }
+  $workTrusted = $true
   $lines = [System.IO.File]::ReadAllLines($journal)
-  $ready = $false
-  $seen = @{}
-  $entries = @()
-  foreach ($line in $lines) {
-    if ($line -eq 'Bereit') { $ready = $true; continue }
-    if ($line.StartsWith('Ersetzt ')) { if ($line -notmatch '^Ersetzt \d+$') { throw 'Das Journal ist nicht lesbar.' }; continue }
-    if (-not $line.StartsWith('Vorher ')) { if ($ready) { throw 'Das Journal ist nicht lesbar.' }; continue }
-    if (-not $ready) { throw 'Das Journal ist unvollstaendig.' }
-    if ($line -notmatch '^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)(?: \| Sicherungsdatei: .+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: (.+)$') { throw 'Das Journal ist nicht lesbar.' }
-    $e = @{ N = $Matches[1]; Kind = $Matches[2]; Dst = $Matches[3]; Hash = $Matches[4]; Tmp = $Matches[5] }
-    if ($seen.ContainsKey($e.N)) { throw 'Das Journal ist nicht lesbar.' }
-    $seen[$e.N] = $true
-    if ($allowed -notcontains $e.Dst) { throw 'Unerwarteter Eintrag im Journal.' }
-    if ($e.Kind -eq 'Sicherung') {
-      if (-not $e.Hash) { throw 'Das Journal ist nicht lesbar.' }
-      $alt = Join-Path $Work 'Alt'
-      $e.Bak = Join-Path $alt $e.N
-      if (-not (Test-Path -LiteralPath $e.Bak -PathType Leaf)) { throw ('Sicherung fehlt: ' + $e.Bak) }
-      Assert-Protected $alt
-      Assert-Protected $e.Bak
-      if ((Get-FileHash -LiteralPath $e.Bak -Algorithm SHA256).Hash -ne $e.Hash) { throw ('Sicherung veraendert: ' + $e.Bak) }
-    }
-    $entries += ,$e
+  if ($lines.Count -lt 2 -or -not $lines[0].StartsWith('RDP Pilot ') -or -not $lines[0].EndsWith(' - Wiederherstellungsjournal')) { throw 'Das Journal ist nicht lesbar.' }
+  $format155 = (-not $format2) -and ($lines -ccontains 'Bereit')
+  $withHash = $format2 -or $format155
+  $planned = @()
+  $i = 1
+  if ($format2) {
+    if ($lines[1] -cne 'Journalformat 2') { throw 'Das Journal ist nicht lesbar.' }
+    $i = 2
   }
-  if (-not $ready) { throw 'Das Journal ist unvollstaendig.' }
-  $noRestart = $false
+  if ($format2) { $first = 'Geplant ' } elseif ($format155) { $first = 'Bereit' } else { $first = 'Vorher ' }
+  while ($i -lt $lines.Count -and -not $lines[$i].StartsWith($first)) { if ($lines[$i] -cmatch $keywords) { throw 'Das Journal ist nicht lesbar.' }; $i++ }
+  if ($format2) {
+    while ($i -lt $lines.Count -and $lines[$i].StartsWith('Geplant ')) {
+      if ($lines[$i] -cnotmatch '^Geplant (\d+): Ziel: (.+)$') { throw 'Das Journal ist nicht lesbar.' }
+      if ($Matches[1] -ne [string]($planned.Count + 1) -or $allowed -notcontains $Matches[2] -or $planned -contains $Matches[2]) { throw 'Unerwarteter Eintrag im Journal.' }
+      $planned += $Matches[2]
+      $i++
+    }
+    if ($planned.Count -eq 0) { throw 'Das Journal ist unvollstaendig.' }
+  }
+  if ($withHash) {
+    if ($i -ge $lines.Count -or $lines[$i] -cne 'Bereit') { throw 'Das Journal ist unvollstaendig.' }
+    $i++
+  }
+  $replacedLast = $true
+    for (; $i -lt $lines.Count; $i++) {
+      $line = $lines[$i]
+      if ($line -cmatch '^Ersetzt (\d+)$') {
+        if ($entries.Count -eq 0 -or $replacedLast -or $Matches[1] -ne $entries[$entries.Count - 1].N) { throw 'Das Journal ist nicht lesbar.' }
+        $replacedLast = $true
+        continue
+      }
+      if ($withHash) { $ok = $line -cmatch '^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)(?: \| Sicherungsdatei: .+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: (.+)$' }
+      else { $ok = $line -cmatch '^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)()(?: \| Sicherungsdatei: .+?)? \| Hilfsdatei: (.+)$' }
+      if (-not $ok) { throw 'Das Journal ist nicht lesbar.' }
+      $e = @{ N = $Matches[1]; Kind = $Matches[2]; Dst = $Matches[3]; Hash = [string]$Matches[4]; Tmp = $Matches[5] }
+      if ($e.N -ne [string]($entries.Count + 1) -or ($format2 -and $entries.Count -gt 0 -and -not $replacedLast) -or $allowed -notcontains $e.Dst) { throw 'Unerwarteter Eintrag im Journal.' }
+      if ($format2 -and ($entries.Count -ge $planned.Count -or $planned[$entries.Count] -ne $e.Dst)) { throw 'Unerwarteter Eintrag im Journal.' }
+      if ($withHash) {
+        if ($e.Kind -eq 'Sicherung' -and $e.Hash.Length -eq 0) { throw 'Das Journal ist nicht lesbar.' }
+        if ($e.Kind -eq 'Neu' -and $line.Contains(' | Sicherungsdatei: ')) { throw 'Das Journal ist nicht lesbar.' }
+      }
+      if ($e.Kind -eq 'Sicherung') {
+        $alt = Join-Path $Work 'Alt'
+        $e.Bak = Join-Path $alt $e.N
+        # Stromausfall zwischen Kopie und Umbenennen: die vollstaendige .teil-Datei nur mit passender Pruefsumme nehmen
+        if (-not (Test-Path -LiteralPath $e.Bak -PathType Leaf) -and $e.Hash.Length -gt 0 -and (Test-Path -LiteralPath ($e.Bak + '.teil') -PathType Leaf)) { $e.Bak = $e.Bak + '.teil' }
+        if (-not (Test-Path -LiteralPath $e.Bak -PathType Leaf)) { throw ('Sicherung fehlt: ' + $e.Bak) }
+        Assert-Protected $alt
+        Assert-Protected $e.Bak
+        $bakHash = (Get-FileHash -LiteralPath $e.Bak -Algorithm SHA256).Hash
+        if ($e.Hash.Length -gt 0 -and $bakHash -ne $e.Hash) { throw ('Sicherung veraendert: ' + $e.Bak) }
+        $e.Hash = $bakHash
+      }
+      foreach ($x in $entries) { if ($x.Dst -eq $e.Dst) { throw 'Das Journal nennt ein Ziel doppelt.' } }
+      $entries += ,$e
+      $replacedLast = $false
+  }
+  # ab hier kann schon eine Datei zurueckgesetzt sein: jeder Abbruch ist OFFEN (Merker bleibt, kein Neustart)
   $failed = @()
   foreach ($e in $entries) {
     $kind = $e.Kind; $dst = $e.Dst; $tmp = $e.Tmp
@@ -1285,42 +1668,114 @@ try {
   }
   if ($failed.Count -gt 0) { $noRestart = $true; throw ('Wiederherstellung unvollstaendig (' + ($failed -join '; ') + ').') }
   Remove-Item -LiteralPath (Join-Path $Work 'Wiederherstellung-offen') -Force
+  # vollstaendig zurueckgesetzt und Merker entfernt: Neustart erlaubt
+  $noRestart = $false
   $result = 'ZURUECK Die vorherige Version wurde wiederhergestellt.'
 } catch {
   if ($noRestart) { $result = 'OFFEN ' + $_.Exception.Message } else { $result = 'FEHLER ' + $_.Exception.Message }
 }
 if ($haveLock) { try { $lock.ReleaseMutex() } catch {} }
 if ($Elevated) {
-  # Ergebnis in den geschuetzten Arbeitsordner; den Neustart macht der nicht erhoehte Neustarthelfer
+  # Ergebnis nur in einen gepruefen Arbeitsordner; sonst ohne Update.log beenden (Neustarthelfer: Ergebnis unbekannt,
+  # kein Neustart)
+  if (-not $workTrusted) { if ($haveLock) { try { $lock.ReleaseMutex() } catch {} }; exit 1 }
   try { $result | Out-File -LiteralPath (Join-Path $Work 'Update.log') -Encoding utf8 } catch {}
 } else {
   try { $result | Out-File -LiteralPath $Log -Encoding utf8 } catch { $noRestart = $true }
   if ($result.StartsWith('ZURUECK')) { Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue }
-  if (-not $noRestart -and -not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
-    if ($Tray) { Start-Process -FilePath $Exe -ArgumentList '--nach-update','/tray' }
-    else { Start-Process -FilePath $Exe -ArgumentList '--nach-update' }
+  if (-not $noRestart -and -not (Test-OldInstance)) {
+    if ($Tray) { Start-Program $true }
+    else { Start-Program $false }
   }
 }
 ";
 
  const string RestartScript=@"
+# alte Instanz an Prozess-ID und Startzeit erkennen (eine wiederverwendete Prozess-ID gilt nicht als alte Instanz)
+function Test-OldInstance {
+  $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if (-not $p) { return $false }
+  if ($ProcessStart -gt 0) { try { return ($p.StartTime.ToUniversalTime().Ticks -eq $ProcessStart) } catch { return $true } }
+  return $true
+}
+# Neustart mit --nach-update und Versuchskennung. Nach einer Wiederherstellung ($LegacyFallback) kann die EXE aelter
+# als 1.56 sein und kennt keine Kennung: Dann nur --nach-update, und das Ergebnis wird erst unmittelbar vor dem Start
+# in die gemeinsame Datei kopiert, die aeltere Fassungen lesen ($SharedLog).
+function Start-Program([bool]$tray) {
+  $a = @('--nach-update')
+  $modern = $true
+  if ($LegacyFallback) { try { $modern = ([Version][System.Diagnostics.FileVersionInfo]::GetVersionInfo($Exe).FileVersion) -ge [Version]'1.56' } catch { $modern = $false } }
+  if ($modern -and $AttemptId) { $a += $AttemptId }
+  elseif ($SharedLog -and (Test-Path -LiteralPath $Log)) { try { Copy-Item -LiteralPath $Log -Destination $SharedLog -Force } catch {} }
+  if ($tray) { $a += '/tray' }
+  Start-Process -FilePath $Exe -ArgumentList $a
+}
 $ErrorActionPreference = 'SilentlyContinue'
+# Startbestaetigung abwarten: RDP Pilot schreibt nach dem Start des erhoehten Skripts dessen Prozess-ID in $StartFile
+# (oder ABBRUCH). Endet RDP Pilot ohne Bestaetigung bzw. kommt ABBRUCH, wurde nichts Erhoehtes gestartet: beenden.
+$Installer = 0
+# Bereitschaft melden: erst danach startet RDP Pilot das erhoehte Skript
+try { 'bereit' | Out-File -LiteralPath $ReadyFile -Encoding ascii } catch {}
+$end = (Get-Date).AddMinutes(15)
+while ((Get-Date) -lt $end) {
+  if (Test-Path -LiteralPath $StartFile) {
+    $s = [string](Get-Content -LiteralPath $StartFile -TotalCount 1)
+    Remove-Item -LiteralPath $StartFile -Force
+    if ($s.Trim() -match '^[0-9]{1,10}$') { $Installer = [int]$s.Trim() }
+    break
+  }
+  if (-not (Test-OldInstance)) {
+    Start-Sleep -Milliseconds 500
+    if (-not (Test-Path -LiteralPath $StartFile)) { break }
+  } else { Start-Sleep -Milliseconds 250 }
+}
+if ($Installer -le 0) { exit }
+# Handle auf genau diesen Prozess oeffnen (SYNCHRONIZE | QUERY_LIMITED_INFORMATION, auch fuer erhoehte Prozesse
+# erlaubt). RDP Pilot haelt seinen eigenen Handle offen, bis diese Bestaetigung da ist: Die Prozess-ID kann bis
+# dahin nicht neu vergeben werden, danach haelt dieser Handle den Prozess fest.
+$hInst = [IntPtr]::Zero
+$waitNote = $null
+try {
+  $sig = '[DllImport(""kernel32.dll"", SetLastError = true)] public static extern IntPtr OpenProcess(int access, bool inherit, int pid); [DllImport(""kernel32.dll"", SetLastError = true)] public static extern uint WaitForSingleObject(IntPtr handle, int ms); [DllImport(""kernel32.dll"")] public static extern bool CloseHandle(IntPtr handle);'
+  $k32 = Add-Type -MemberDefinition $sig -Name 'Warten' -Namespace 'RdpPilotNeustart' -PassThru
+  $hInst = $k32::OpenProcess(0x00101000, $false, $Installer)
+  if ($hInst -eq [IntPtr]::Zero) { $waitNote = 'Kein Zugriff auf das Update (Windows-Fehler ' + [System.Runtime.InteropServices.Marshal]::GetLastWin32Error() + '), Rueckfall auf die Prozess-ID.' }
+} catch { $waitNote = 'Warten ueber Handle nicht moeglich, Rueckfall auf die Prozess-ID: ' + $_.Exception.Message }
+# Kein Handle (z. B. UAC mit einem anderen Administratorkonto): Rueckfall auf die Prozess-ID. Bis zur Bestaetigung
+# haelt RDP Pilot seinen eigenen Handle offen; die Prozess-ID kann bis dahin nicht neu vergeben werden.
+# Empfang bestaetigen: erst danach gibt RDP Pilot das erhoehte Skript frei
+try { [string]$Installer | Out-File -LiteralPath $AckFile -Encoding ascii } catch { exit }
+# $true = laeuft noch. WAIT_OBJECT_0 (0) = beendet, WAIT_TIMEOUT (258) = laeuft; WAIT_FAILED: Fehlercode merken und
+# ab dann ueber die Prozess-ID pruefen
+function Test-Installer {
+  if ($hInst -ne [IntPtr]::Zero) {
+    $r = $k32::WaitForSingleObject($hInst, 0)
+    if ($r -eq 0) { return $false }
+    if ($r -eq 258) { return $true }
+    $script:waitNote = 'Warten auf das Update fehlgeschlagen (Windows-Fehler ' + [System.Runtime.InteropServices.Marshal]::GetLastWin32Error() + '), Rueckfall auf die Prozess-ID.'
+    try { [void]$k32::CloseHandle($hInst) } catch {}
+    $script:hInst = [IntPtr]::Zero
+  }
+  return [bool](Get-Process -Id $Installer -ErrorAction SilentlyContinue)
+}
 # Neustart erst nach bestaetigtem Ende des Installers; bei Fristablauf Fehler melden und nicht starten
 $end = (Get-Date).AddMinutes(15)
 $workLog = Join-Path $Work 'Update.log'
 $finished = $false
 while ((Get-Date) -lt $end) {
-  if ($Installer -gt 0) { if (-not (Get-Process -Id $Installer -ErrorAction SilentlyContinue)) { $finished = $true; break } }
-  elseif (Test-Path -LiteralPath $workLog) { $finished = $true; break }
+  if (-not (Test-Installer)) { $finished = $true; break }
   Start-Sleep -Milliseconds 500
 }
+if ($hInst -ne [IntPtr]::Zero) { try { [void]$k32::CloseHandle($hInst) } catch {} }
 if (-not $finished) {
-  'FEHLER Das Update ist nach 15 Minuten nicht fertig geworden. RDP Pilot wurde nicht neu gestartet.' | Out-File -LiteralPath $Log -Encoding utf8
+  $msg = 'FEHLER Das Update ist nach 15 Minuten nicht fertig geworden. RDP Pilot wurde nicht neu gestartet.'
+  if ($waitNote) { $msg += ' ' + $waitNote }
+  $msg | Out-File -LiteralPath $Log -Encoding utf8
   exit
 }
 Start-Sleep -Milliseconds 300
 $text = $null
-if (Test-Path -LiteralPath $workLog) { $text = Get-Content -LiteralPath $workLog -Raw -Encoding UTF8 }
+if ((Test-Path -LiteralPath $workLog) -and (Get-Item -LiteralPath $workLog).Length -le 16384) { $text = Get-Content -LiteralPath $workLog -Raw -Encoding UTF8 }
 if ($text) { $text = $text.Trim() }
 if ($Attempt) { Remove-Item -LiteralPath $Attempt -Recurse -Force }
 # Neustart nur bei eindeutigem Abschluss: installiert (OK) oder nichts veraendert bzw. vollstaendig zurueckgesetzt (FEHLER)
@@ -1333,13 +1788,13 @@ if (-not $clear) {
 $text | Out-File -LiteralPath $Log -Encoding utf8
 # alte Instanz muss beendet sein (Ladefehler kommen sehr frueh)
 $deadline = (Get-Date).AddSeconds(60)
-while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+while ((Test-OldInstance) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+if (Test-OldInstance) {
   ($text + ' RDP Pilot wurde nicht neu gestartet, weil die alte Instanz noch laeuft.') | Out-File -LiteralPath $Log -Encoding utf8
   exit
 }
-if ($Tray) { Start-Process -FilePath $Exe -ArgumentList '--nach-update','/tray' }
-else { Start-Process -FilePath $Exe -ArgumentList '--nach-update' }
+if ($Tray) { Start-Program $true }
+else { Start-Program $false }
 ";
 
  // Aus dem Release-Text nur den Abschnitt "## Änderungen", Punkte als "•", ohne Markdown

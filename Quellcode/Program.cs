@@ -38,6 +38,11 @@ static class Program {
   if(args.Length>0&&args[0].Equals("--nach-update",StringComparison.OrdinalIgnoreCase)) {
    MainForm.AfterUpdate=true;
    args=args.Skip(1).ToArray();
+   // ab 1.56 folgt die Versuchskennung (32 Hex-Zeichen): nur das Ergebnis genau dieses Versuchs anzeigen
+   if(args.Length>0&&System.Text.RegularExpressions.Regex.IsMatch(args[0],"^[0-9a-f]{32}$")) {
+    MainForm.UpdateAttempt=args[0];
+    args=args.Skip(1).ToArray();
+   }
   }
   // Screenshots mit Beispieldaten (hell und dunkel) für GitHub, z. B. aus der Erstellen.bat
   if(args.Length>0&&args[0].Equals("--screenshots",StringComparison.OrdinalIgnoreCase)) {
