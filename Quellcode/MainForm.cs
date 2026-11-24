@@ -91,6 +91,8 @@ public class MainForm:Form {
  readonly System.Windows.Forms.Timer folderTimer=new System.Windows.Forms.Timer{Interval=600};
  readonly System.Windows.Forms.Timer displayTimer=new System.Windows.Forms.Timer{Interval=1200};
  readonly bool live; // false bei den Demo-Screenshots: nichts überwachen
+ // Programmordner darf von selbst aufgelistet und überwacht werden (lokal, ohne Umleitung); sonst nur mit F5
+ readonly bool folderAuto;
 
  public MainForm(string startFile):this(startFile,null){}
 
@@ -98,6 +100,8 @@ public class MainForm:Form {
  public MainForm(string startFile,string folderOverride) {
   folder=folderOverride??AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
   live=folderOverride==null&&!Demo.Active&&Monitors.Override==null;
+  bool folderMissing;
+  folderAuto=!live||RdpFile.SafeToTouch(folder,out folderMissing);
   monitors=Monitors.Load();
 
   Text=AppInfo.Product+" "+AppInfo.Version;
@@ -243,16 +247,20 @@ public class MainForm:Form {
   ReloadList(null);
   if(live) {
    // gemerkte Verbindungen aus anderen Ordnern wieder in die Liste, zuletzt gewählte Verbindung wieder auswählen
-   // Netzwerkpfade werden dabei nicht angefasst (kein Zugriff auf den Server beim Start), sondern erst gelesen,
-   // wenn man sie auswählt; eine zuletzt gewählte Verbindung im Netz wird deshalb nicht automatisch ausgewählt.
+   // Netzwerkpfade und Pfade mit Umleitung (Verknüpfung, Abzweigung, Cloud-Platzhalter) werden dabei nicht angefasst
+   // (kein Zugriff auf einen Server beim Start), sondern erst gelesen, wenn man sie auswählt; eine solche zuletzt
+   // gewählte Verbindung wird deshalb nicht automatisch ausgewählt.
    foreach(string f in UpdateSettings.Files.ToList()) {
-    if(RdpFile.IsNetworkPath(f))AddPath(f,false,true);
-    else if(File.Exists(f))AddPath(f,false);
+    bool missing;
+    if(!RdpFile.SafeToTouch(f,out missing))AddPath(f,false,true);
+    else if(!missing)AddPath(f,false);
    }
-   if(String.IsNullOrEmpty(startFile)&&last!=null&&!RdpFile.IsNetworkPath(last)&&File.Exists(last))AddPath(last,true);
+   bool lastMissing;
+   if(String.IsNullOrEmpty(startFile)&&last!=null&&RdpFile.SafeToTouch(last,out lastMissing)&&!lastMissing)AddPath(last,true);
   }
   if(!String.IsNullOrEmpty(startFile)&&File.Exists(startFile))AddPath(startFile,true);
-  if(paths.Count==0)Status("Keine .rdp-Dateien im Ordner gefunden. Lege deine Verbindungen neben die EXE oder wähle über „Andere Datei …“ eine aus.",InfoKind.Warning);
+  if(!folderAuto)Status("Der Programmordner liegt im Netzwerk oder hinter einer Umleitung und wird nicht von selbst gelesen. F5 liest ihn ein.",InfoKind.Info);
+  else if(paths.Count==0)Status("Keine .rdp-Dateien im Ordner gefunden. Lege deine Verbindungen neben die EXE oder wähle über „Andere Datei …“ eine aus.",InfoKind.Warning);
  }
 
  Panel MakeHead(string title,Label detail,Control[] buttons) {
@@ -338,8 +346,10 @@ public class MainForm:Form {
  }
 
  // --- Ordner überwachen -----------------------------------------------------------------
+ // Bildschirme immer überwachen; den Programmordner nur, wenn er lokal und ohne Umleitung ist (sonst F5)
  void StartWatching() {
   Microsoft.Win32.SystemEvents.DisplaySettingsChanged+=OnDisplayChanged;
+  if(!folderAuto)return;
   try {
    watcher=new FileSystemWatcher(folder,"*.rdp"){NotifyFilter=NotifyFilters.FileName,IncludeSubdirectories=false,SynchronizingObject=this};
    FileSystemEventHandler changed=(s,e)=>{folderTimer.Stop();folderTimer.Start();};
@@ -373,7 +383,7 @@ public class MainForm:Form {
  protected override bool ProcessCmdKey(ref Message msg,Keys keyData) {
   if(keyData==Keys.F5) {
    ReloadMonitors(false);
-   ReloadList(CurrentPath());
+   ReloadList(CurrentPath(),true);
    if(info.Kind!=InfoKind.Warning&&info.Kind!=InfoKind.Error)
     Status("Neu eingelesen: "+(paths.Count==1?"1 Verbindung":paths.Count+" Verbindungen")+", "+(monitors.Count==1?"1 Bildschirm":monitors.Count+" Bildschirme")+".",InfoKind.Info);
    return true;
@@ -685,13 +695,15 @@ public class MainForm:Form {
  // lazy: Netzwerkpfad nicht lesen, bevor er ausgewählt wird
  void AddPath(string path,bool selectIt,bool lazy) {
   string full=Path.GetFullPath(path);
+  // ohne ausdrückliche Auswahl nur lesen, was lokal ist und über keine Umleitung führt (auch im Programmordner)
+  if(!selectIt){bool missing;lazy=!RdpFile.SafeToTouch(full,out missing);}
   if(!RdpFile.IsRdp(full)){Status("Keine RDP-Datei (.rdp): "+Path.GetFileName(full),InfoKind.Warning);return;}
   int index=paths.FindIndex(p=>String.Equals(p,full,StringComparison.OrdinalIgnoreCase));
   if(index<0) {
    paths.Add(full);
    string title=Path.GetFileNameWithoutExtension(full);
    if(!InFolder(full))title=title+"  ("+Path.GetDirectoryName(full)+")";
-   select.Items.Add(new ModernSelect.Item{Title=title,Detail=lazy&&!selectIt?"Netzwerkpfad – wird beim Auswählen gelesen":DescribeFile(full),Tag=full});
+   select.Items.Add(new ModernSelect.Item{Title=title,Detail=lazy&&!selectIt?"Netzwerk oder umgeleiteter Pfad – wird beim Auswählen gelesen":DescribeFile(full),Tag=full});
    index=paths.Count-1;
    if(!InFolder(full))RememberFile(full);
   }
@@ -706,7 +718,7 @@ public class MainForm:Form {
   if(UpdateSettings.Files.Contains(full,StringComparer.OrdinalIgnoreCase))return;
   UpdateSettings.Files.Add(full);
   // nicht mehr vorhandene Dateien entfernen, Liste begrenzen
-  UpdateSettings.Files.RemoveAll(f=>!RdpFile.IsNetworkPath(f)&&!File.Exists(f)); // Netzwerkpfade nicht prüfen
+  UpdateSettings.Files.RemoveAll(f=>{bool missing;return RdpFile.SafeToTouch(f,out missing)&&missing;}); // Netzwerk und Umleitungen nicht prüfen
   while(UpdateSettings.Files.Count>UpdateSettings.MaxFiles)UpdateSettings.Files.RemoveAt(0);
   UpdateSettings.Save();
  }
@@ -720,19 +732,24 @@ public class MainForm:Form {
   UpdateSettings.Save();
  }
 
- void ReloadList(string keep) {
+ void ReloadList(string keep){ReloadList(keep,false);}
+ // manual: von Hand (F5) – dann auch einen Programmordner im Netzwerk oder hinter einer Umleitung auflisten
+ void ReloadList(string keep,bool manual) {
   // über "Andere Datei …" hinzugefügte Verbindungen aus anderen Ordnern bleiben in der Liste
-  var external=paths.Where(p=>!InFolder(p)&&(RdpFile.IsNetworkPath(p)||File.Exists(p))).ToList();
+  // Netzwerk und umgeleitete Pfade dabei nicht anfassen (bleiben ungelesen in der Liste)
+  var external=paths.Where(p=>{bool missing;return !InFolder(p)&&(!RdpFile.SafeToTouch(p,out missing)||!missing);}).ToList();
   paths.Clear();select.Clear();
-  try {
+  if(folderAuto||manual) try {
    foreach(string f in Directory.GetFiles(folder,"*.rdp").OrderBy(f=>Path.GetFileName(f),StringComparer.CurrentCultureIgnoreCase))AddPath(f,false);
   } catch(Exception ex){Status("Ordner konnte nicht gelesen werden: "+ex.Message,InfoKind.Error);}
-  foreach(string f in external)AddPath(f,false,RdpFile.IsNetworkPath(f));
-  if(keep!=null&&File.Exists(keep))AddPath(keep,true);
+  foreach(string f in external)AddPath(f,false,true); // AddPath liest nur, was SafeToTouch erlaubt
+  // keep ist die Verbindung, die man gerade ausgewählt hatte (ausdrücklich gewählt, darf also gelesen werden)
+  bool keepMissing;
+  if(keep!=null&&(!RdpFile.SafeToTouch(keep,out keepMissing)||!keepMissing))AddPath(keep,true);
   else {
-   // von selbst keine gemerkte Verbindung im Netz auswählen (die erst, wenn man sie anklickt);
-   // der Programmordner selbst ist ohnehin schon eingelesen
-   int first=paths.FindIndex(p=>InFolder(p)||!RdpFile.IsNetworkPath(p));
+   // von selbst nur eine lokale Verbindung ohne Umleitung auswählen; Netzwerk und umgeleitete Pfade erst, wenn
+   // man sie anklickt
+   int first=paths.FindIndex(p=>{bool missing;return RdpFile.SafeToTouch(p,out missing)&&!missing;});
    if(first>=0)select.SelectedIndex=first;
    else LoadCurrent();
   }

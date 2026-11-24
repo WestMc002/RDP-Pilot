@@ -168,13 +168,46 @@ public class RdpFile {
 
  // Netzwerkpfad (\\server\freigabe\… oder verbundenes Netzlaufwerk)? Ermittelt ohne Zugriff auf das Netz,
  // damit beim Programmstart keine Verbindung zum Server (und keine Anmeldung) ausgelöst wird.
+ // Für automatische Zugriffe beim Start: true = lokal und ohne umgeleitete Pfadteile (Verknüpfung, Abzweigung,
+ // Bereitstellungspunkt, Cloud-Platzhalter), darf also ohne Auswahl gelesen werden; missing = existiert nicht.
+ // Die Teile werden von der Wurzel an einzeln geprüft (ohne einer Umleitung zu folgen); im Zweifel false.
+ public static bool SafeToTouch(string path,out bool missing) {
+  missing=false;
+  if(String.IsNullOrEmpty(path)||IsNetworkPath(path))return false;
+  try {
+   string full=System.IO.Path.GetFullPath(path);
+   string root=System.IO.Path.GetPathRoot(full);
+   if(String.IsNullOrEmpty(root)||root.Length!=3||root[1]!=':')return false;
+   string current=root;
+   foreach(string part in full.Substring(root.Length).Split(new[]{'\\'},StringSplitOptions.RemoveEmptyEntries)) {
+    current=System.IO.Path.Combine(current,part);
+    FileAttributes attributes;
+    try {attributes=File.GetAttributes(current);}
+    catch(FileNotFoundException){missing=true;return true;}
+    catch(DirectoryNotFoundException){missing=true;return true;}
+    if((attributes&FileAttributes.ReparsePoint)!=0)return false;
+   }
+   return true;
+  } catch {return false;}
+ }
+
  public static bool IsNetworkPath(string path) {
   if(String.IsNullOrEmpty(path))return false;
-  if(path.StartsWith(@"\\")||path.StartsWith("//"))return !path.StartsWith(@"\\?\")||path.StartsWith(@"\\?\UNC\",StringComparison.OrdinalIgnoreCase);
+  // Gerätepfade normalisieren: \\?\X:\ → X:\ (Laufwerkstyp prüfen); \\?\UNC\…, \\.\… und andere Gerätepfade gelten als Netzwerk
+  if(path.StartsWith(@"\\?\")) {
+   string rest=path.Substring(4);
+   if(rest.Length>=3&&Char.IsLetter(rest[0])&&rest[1]==':'&&rest[2]=='\\')path=rest;
+   else return true;
+  }
+  if(path.StartsWith(@"\\")||path.StartsWith("//"))return true;
+  if(path.StartsWith("file:",StringComparison.OrdinalIgnoreCase))return true;
+  // fail-closed: scheitert die Abfrage oder ist der Laufwerkstyp unbekannt, wie einen Netzwerkpfad behandeln
   try {
    string root=System.IO.Path.GetPathRoot(path);
-   return !String.IsNullOrEmpty(root)&&root.Length>=2&&root[1]==':'&&new DriveInfo(root.Substring(0,1)).DriveType==DriveType.Network;
-  } catch {return false;}
+   if(String.IsNullOrEmpty(root)||root.Length<2||root[1]!=':')return false; // relativer Pfad: liegt im Programmordner
+   var type=new DriveInfo(root.Substring(0,1)).DriveType;
+   return type==DriveType.Network||type==DriveType.Unknown||type==DriveType.NoRootDirectory;
+  } catch {return true;}
  }
 
  public static bool IsRdp(string path) {

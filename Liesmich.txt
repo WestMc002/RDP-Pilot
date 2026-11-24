@@ -99,7 +99,23 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
-1.56  Update: Das Wiederherstellungsjournal hat ein festes Format mit Versionskennung und
+1.58  Update: Steuerdateien des Updates (Start, Bestätigung, Freigabe) werden einmal
+      geöffnet und höchstens 256 Bytes gelesen; größere oder unlesbare gelten als
+      ungültig. Das Update mit Administratorrechten legt sein Ergebnis je Versuch als
+      Letztes und vollständig im Arbeitsordner ab; der Neustart-Helfer liest nur diese
+      Datei. Der Helfer merkt sich die Startzeit des Updates, damit eine neu vergebene
+      Prozess-ID nicht mit ihm verwechselt wird; lässt sie sich nicht lesen, zählt nur das
+      Ergebnis dieses Versuchs, und kommt es nicht binnen 2 Minuten, wird „offen“
+      gemeldet. Wird eine Version vor 1.56 wiederhergestellt, zeigt der Helfer das
+      Ergebnis selbst an; die gemeinsame Update.log wird nicht mehr beschrieben. Der
+      Versuchsordner wird nur gelöscht, wenn das Ende des Updates belegt ist.
+      Verbindungsliste (gemerkte, im Programmordner, beim Neuladen und bei der automatischen
+      Vorauswahl): Lässt sich der Laufwerkstyp nicht sicher bestimmen (auch bei
+      Gerätepfaden) oder führt ein Teil des Pfads über eine Verknüpfung, Abzweigung oder
+      einen Cloud-Platzhalter, wird die Datei wie im Netzwerk erst beim Auswählen gelesen.
+      Liegt der Programmordner selbst im Netzwerk oder hinter einer Umleitung, wird er
+      weder von selbst aufgelistet noch überwacht; F5 liest ihn ein.
+1.57  Update: Das Wiederherstellungsjournal hat ein festes Format mit Versionskennung und
       nennt vor dem ersten Austausch alle geplanten Dateien. Aufräumen und Wiederherstellen
       prüfen es nach denselben strengen Regeln; im Zweifel bleibt alles erhalten.
       Nicht abgeschlossene Updates aus 1.54 und 1.55 werden an ihrem jeweiligen Format
