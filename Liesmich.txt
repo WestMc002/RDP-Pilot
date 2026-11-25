@@ -99,6 +99,9 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.59  Update: Bricht ein Update von Version 1.54 unter „Programme“ ab, setzt RDP Pilot
+      es nicht mehr mit Administratorrechten zurück (die Sicherungen dieser Version haben
+      keine Prüfsumme), sondern bietet die Download-Seite zur Neuinstallation an.
 1.58  Update: Steuerdateien des Updates (Start, Bestätigung, Freigabe) werden einmal
       geöffnet und höchstens 256 Bytes gelesen; größere oder unlesbare gelten als
       ungültig. Das Update mit Administratorrechten legt sein Ergebnis je Versuch als

@@ -861,6 +861,26 @@ static class UpdateCheck {
   } catch {return false;}
  }
 
+ // Altformat 1.54 (Merker nur Alt-Ordner, Journal ohne "Bereit", Sicherungen ohne Prüfsumme) in einem geschützten
+ // Arbeitsordner unter ProgramData: Die Sicherungen lassen sich nicht gegen eine Prüfsumme prüfen, deshalb wird mit
+ // Administratorrechten nichts zurückgesetzt, sondern auf die Neuinstallation aus dem signierten Paket hingewiesen.
+ // Im Zweifel (Journal nicht lesbar) false: dann entscheidet die normale Prüfung (OFFEN).
+ static bool IsProtectedDir(string dir) {
+  string data=Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+  return String.Equals(Path.GetDirectoryName(dir),data,StringComparison.OrdinalIgnoreCase);
+ }
+ static bool LegacyWithoutHash(string dir) {
+  try {
+   if(ReadMarker(dir)!=MarkerKind.Legacy)return false;
+   string journal=Path.Combine(dir,"Wiederherstellung.txt");
+   if(!File.Exists(journal)||new FileInfo(journal).Length>64*1024)return false;
+   return !File.ReadAllLines(journal,Encoding.UTF8).Contains("Bereit");
+  } catch {return false;}
+ }
+ public const string ReinstallText=PendingText+" Es stammt von einer älteren Version, deren Sicherungen keine Prüfsumme haben. "+
+  "Mit Administratorrechten setzt "+AppInfo.FullName+" sie deshalb nicht automatisch zurück.\n\n"+
+  "Bitte die aktuelle Version von der Download-Seite laden und neu installieren.";
+
  // Nicht abgeschlossenes Update: nachfragen und die vorherige Version wiederherstellen (RDP Pilot wird dazu beendet
  // und danach neu gestartet). true = Wiederherstellung läuft, RDP Pilot soll sich beenden.
  public static bool OfferRepair(IWin32Window owner) {
@@ -880,6 +900,12 @@ static class UpdateCheck {
   string dir=PendingRestore();
   if(dir==null)return false;
   Log.Write("Update","Nicht abgeschlossenes Update gefunden: "+dir);
+  if(IsProtectedDir(dir)&&LegacyWithoutHash(dir)) {
+   Log.Write("Update","Altes Journal ohne Prüfsummen im geschützten Arbeitsordner, keine Wiederherstellung: "+dir);
+   if(MessageBox.Show(owner,ReinstallText+"\n\nDownload-Seite jetzt öffnen?",AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Warning)==DialogResult.Yes)
+    OpenPage(null);
+   return false;
+  }
   if(MessageBox.Show(owner,PendingText+"\n\n"+AppInfo.FullName+" stellt jetzt die vorherige Version wieder her und startet danach neu.\n\nJetzt wiederherstellen?",
    AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Information)!=DialogResult.Yes)return false;
   try {Repair(dir);return true;}
@@ -893,8 +919,8 @@ static class UpdateCheck {
  static void Repair(string dir) {
   if(InProjectFolder)throw new Exception("Im Projektordner wird nichts zurückgesetzt.");
   if(IsElevated)throw new Exception(AppInfo.FullName+" läuft gerade mit Administratorrechten.");
-  string data=Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-  bool protectedDir=String.Equals(Path.GetDirectoryName(dir),data,StringComparison.OrdinalIgnoreCase);
+  bool protectedDir=IsProtectedDir(dir);
+  if(protectedDir&&LegacyWithoutHash(dir))throw new Exception(ReinstallText);
   string exe=Application.ExecutablePath;
   bool writable=CanWrite(Path.GetDirectoryName(exe));
   // Sicherungen aus dem Temp-Ordner nie mit Administratorrechten zurückkopieren (jedes Programm des Benutzers könnte
@@ -1698,6 +1724,9 @@ try {
   if ($lines.Count -lt 2 -or -not $lines[0].StartsWith('RDP Pilot ') -or -not $lines[0].EndsWith(' - Wiederherstellungsjournal')) { throw 'Das Journal ist nicht lesbar.' }
   $format155 = (-not $format2) -and ($lines -ccontains 'Bereit')
   $withHash = $format2 -or $format155
+  # Altformat 1.54 ohne Pruefsummen: mit Administratorrechten nichts zurueckspielen (Sicherungen nicht pruefbar),
+  # sondern abbrechen; RDP Pilot verweist auf die Neuinstallation aus dem signierten Paket
+  if ($Elevated -and -not $withHash) { throw 'Altes Journal ohne Pruefsummen: mit Administratorrechten wird nicht zurueckgesetzt, bitte neu installieren.' }
   $planned = @()
   $i = 1
   if ($format2) {
