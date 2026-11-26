@@ -137,7 +137,14 @@ static class UpdateCheck {
  static string AckFileFor(string attemptId){return Path.Combine(Folder,TargetId+"-"+attemptId+".empfangen");}
  // Startzeit dieser Instanz (UTC-Ticks): Skripte erkennen die alte Instanz an Prozess-ID und Startzeit
  static long ProcessStartTicks {get {try {return Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;} catch {return 0;}}}
- static bool IsAttemptId(string id){return id!=null&&Regex.IsMatch(id,"^[0-9a-f]{32}$");}
+ // Regex-Prüfungen fremder Daten (Journal, Manifest, Befehlszeile) mit Zeitlimit: Eine Zeitüberschreitung gilt als
+ // "nicht eindeutig prüfbar" und führt zur Ablehnung (kein Treffer). Muster ohne überlappende Alternativen.
+ internal static readonly TimeSpan RxTimeout=TimeSpan.FromMilliseconds(250);
+ internal static Match Rx(string input,string pattern) {
+  try {return Regex.Match(input??"",pattern,RegexOptions.None,RxTimeout);}
+  catch(RegexMatchTimeoutException) {return Match.Empty;}
+ }
+ static bool IsAttemptId(string id){return id!=null&&Rx(id,"^[0-9a-f]{32}$").Success;}
 
  static string UserAgent {get {return "RDP-Pilot/"+AppInfo.Version;}} // GitHub verlangt einen User-Agent
 
@@ -298,7 +305,7 @@ static class UpdateCheck {
   if(values["Programm"]!="RDP Pilot"){detail="Das Manifest gehört zu „"+values["Programm"]+"“, nicht zu RDP Pilot.";return Invalid;}
   if(values["Version"]!=version){detail="Das Manifest nennt Version "+values["Version"]+", das Release "+version+".";return Invalid;}
   if(values["Datei"]!=AssetName(version)){detail="Das Manifest nennt die Datei „"+values["Datei"]+"“.";return Invalid;}
-  if(!Regex.IsMatch(values["SHA256"],"^[0-9a-f]{64}$")){detail="Die Prüfsumme im Manifest ist ungültig.";return Invalid;}
+  if(!Rx(values["SHA256"],"^[0-9a-f]{64}$").Success){detail="Die Prüfsumme im Manifest ist ungültig.";return Invalid;}
   sha=values["SHA256"].ToUpperInvariant();
   return null;
  }
@@ -786,7 +793,7 @@ static class UpdateCheck {
   }
   if(format2) {
    for(;i<lines.Length&&lines[i].StartsWith("Geplant ",StringComparison.Ordinal);i++) {
-    var g=Regex.Match(lines[i],@"^Geplant (\d+): Ziel: (.+)$");
+    var g=Rx(lines[i],@"^Geplant (\d+): Ziel: ([^|]+)$");
     if(!g.Success||g.Groups[1].Value!=(planned.Count+1).ToString()||!allowed(g.Groups[2].Value))return false;
     if(planned.Any(x=>String.Equals(x,g.Groups[2].Value,StringComparison.OrdinalIgnoreCase)))return false;
     planned.Add(g.Groups[2].Value);
@@ -800,15 +807,15 @@ static class UpdateCheck {
   bool replacedLast=true;
   for(;i<lines.Length;i++) {
    string line=lines[i];
-   var e=Regex.Match(line,@"^Ersetzt (\d+)$");
+   var e=Rx(line,@"^Ersetzt (\d+)$");
    if(e.Success) {
     if(list.Count==0||replacedLast||e.Groups[1].Value!=list[list.Count-1].N)return false;
     replacedLast=true;
     continue;
    }
    var m=withHash
-    ?Regex.Match(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)(?: \| Sicherungsdatei: .+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: (.+)$")
-    :Regex.Match(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)()(?: \| Sicherungsdatei: .+?)? \| Hilfsdatei: (.+)$");
+    ?Rx(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: ([^|]+?)(?: \| Sicherungsdatei: [^|]+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: ([^|]+)$")
+    :Rx(line,@"^Vorher (\d+): (Sicherung|Neu) \| Ziel: ([^|]+?)()(?: \| Sicherungsdatei: [^|]+?)? \| Hilfsdatei: ([^|]+)$");
    if(!m.Success)return false;
    var entry=new JournalEntry{N=m.Groups[1].Value,Kind=m.Groups[2].Value,Dst=m.Groups[3].Value,Hash=m.Groups[4].Value,Tmp=m.Groups[5].Value};
    // fortlaufend ab 1; nur im Format 2 muss die vorige Datei bestätigt sein ("Ersetzt" wird dort mit Abbruch bei
@@ -1098,8 +1105,8 @@ function Show-Result {
   } catch {}
   if (-not $text) { $text = 'OFFEN Ergebnis des Updates unbekannt.' }
   $icon = 'Warning'
-  if ($text -match '^OK ') { $icon = 'Information' }
-  $text = $text -replace '^(OK|FEHLER|ZURUECK|OFFEN) ', ''
+  if ($text.StartsWith('OK ', [StringComparison]::Ordinal)) { $icon = 'Information' }
+  foreach ($pre in @('OK ', 'FEHLER ', 'ZURUECK ', 'OFFEN ')) { if ($text.StartsWith($pre, [StringComparison]::Ordinal)) { $text = $text.Substring($pre.Length); break } }
   try {
     Add-Type -AssemblyName System.Windows.Forms
     [void][System.Windows.Forms.MessageBox]::Show($text, 'RDP Pilot', 'OK', $icon)
@@ -1182,6 +1189,19 @@ try {
 
  const string InstallScript=@"
 $ErrorActionPreference = 'Stop'
+# Regex auf fremde Daten (Journal, Manifest, Ordnernamen) mit Zeitlimit 250 ms; setzt $Matches beim Aufrufer.
+# Zeitueberschreitung = nicht eindeutig pruefbar: Abbruch (Ablehnung)
+function Test-Rx([string]$s, [string]$p, [switch]$i) {
+  $o = [System.Text.RegularExpressions.RegexOptions]::None
+  if ($i) { $o = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
+  try { $m = (New-Object System.Text.RegularExpressions.Regex($p, $o, [TimeSpan]::FromMilliseconds(250))).Match($s) }
+  catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { throw 'Daten nicht eindeutig pruefbar (Zeitlimit).' }
+  if (-not $m.Success) { return $false }
+  $g = @{}
+  for ($x = 0; $x -lt $m.Groups.Count; $x++) { $g[$x] = $m.Groups[$x].Value }
+  Set-Variable -Name Matches -Value $g -Scope 1
+  return $true
+}
 # Dateien begrenzt lesen bzw. kopieren; waehrenddessen darf niemand schreiben (FileShare.Read). Bei Ueberschreitung Abbruch, Teilkopie weg.
 function Read-Limited([string]$path, [long]$max) {
   $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
@@ -1263,7 +1283,7 @@ try {
           $o = (Get-Acl -LiteralPath $_.FullName).GetOwner([System.Security.Principal.SecurityIdentifier])
           if ($o -eq $admins -or $o -eq $system) {
             $inactive = $false
-            if ($_.Name -match '^RDP-Pilot-Update-([0-9A-F]{24})-[0-9a-f]{32}$') {
+            if (Test-Rx $_.Name '^RDP-Pilot-Update-([0-9A-F]{24})-[0-9a-f]{32}$' -i) {
               if ($Matches[1] -ceq $TargetId) { $inactive = $true }
               else {
                 $held = $true
@@ -1323,7 +1343,7 @@ try {
   $rsa.Clear()
   if (-not $valid) { throw 'Die Signatur des Updates ist ungueltig.' }
   if ($mv['Programm'] -cne 'RDP Pilot' -or $mv['Version'] -cne $Version -or $mv['Datei'] -cne $AssetName) { throw 'Das Manifest passt nicht zu diesem Update.' }
-  if ($mv['SHA256'] -cnotmatch '^[0-9a-f]{64}$') { throw 'Die Pruefsumme im Manifest ist ungueltig.' }
+  if (-not (Test-Rx $mv['SHA256'] '^[0-9a-f]{64}$')) { throw 'Die Pruefsumme im Manifest ist ungueltig.' }
   $expected = $mv['SHA256'].ToUpperInvariant()
   if ($expected -ne $Sha256) { throw 'Die Pruefsumme im Manifest weicht von der Pruefung im Programm ab.' }
   # ZIP einmal oeffnen (waehrenddessen darf niemand schreiben oder loeschen), Pruefsumme ueber genau diesen Stream
@@ -1569,8 +1589,8 @@ function Show-Result {
   } catch {}
   if (-not $text) { $text = 'OFFEN Ergebnis des Updates unbekannt.' }
   $icon = 'Warning'
-  if ($text -match '^OK ') { $icon = 'Information' }
-  $text = $text -replace '^(OK|FEHLER|ZURUECK|OFFEN) ', ''
+  if ($text.StartsWith('OK ', [StringComparison]::Ordinal)) { $icon = 'Information' }
+  foreach ($pre in @('OK ', 'FEHLER ', 'ZURUECK ', 'OFFEN ')) { if ($text.StartsWith($pre, [StringComparison]::Ordinal)) { $text = $text.Substring($pre.Length); break } }
   try {
     Add-Type -AssemblyName System.Windows.Forms
     [void][System.Windows.Forms.MessageBox]::Show($text, 'RDP Pilot', 'OK', $icon)
@@ -1624,6 +1644,19 @@ try {
 
  const string RepairScript=@"
 $ErrorActionPreference = 'Stop'
+# Regex auf fremde Daten (Journal, Manifest, Ordnernamen) mit Zeitlimit 250 ms; setzt $Matches beim Aufrufer.
+# Zeitueberschreitung = nicht eindeutig pruefbar: Abbruch (Ablehnung)
+function Test-Rx([string]$s, [string]$p, [switch]$i) {
+  $o = [System.Text.RegularExpressions.RegexOptions]::None
+  if ($i) { $o = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase }
+  try { $m = (New-Object System.Text.RegularExpressions.Regex($p, $o, [TimeSpan]::FromMilliseconds(250))).Match($s) }
+  catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { throw 'Daten nicht eindeutig pruefbar (Zeitlimit).' }
+  if (-not $m.Success) { return $false }
+  $g = @{}
+  for ($x = 0; $x -lt $m.Groups.Count; $x++) { $g[$x] = $m.Groups[$x].Value }
+  Set-Variable -Name Matches -Value $g -Scope 1
+  return $true
+}
 $result = $null
 $noRestart = $false
 $haveLock = $false
@@ -1734,10 +1767,10 @@ try {
     $i = 2
   }
   if ($format2) { $first = 'Geplant ' } elseif ($format155) { $first = 'Bereit' } else { $first = 'Vorher ' }
-  while ($i -lt $lines.Count -and -not $lines[$i].StartsWith($first)) { if ($lines[$i] -cmatch $keywords) { throw 'Das Journal ist nicht lesbar.' }; $i++ }
+  while ($i -lt $lines.Count -and -not $lines[$i].StartsWith($first)) { if (Test-Rx $lines[$i] $keywords) { throw 'Das Journal ist nicht lesbar.' }; $i++ }
   if ($format2) {
     while ($i -lt $lines.Count -and $lines[$i].StartsWith('Geplant ')) {
-      if ($lines[$i] -cnotmatch '^Geplant (\d+): Ziel: (.+)$') { throw 'Das Journal ist nicht lesbar.' }
+      if (-not (Test-Rx $lines[$i] '^Geplant (\d+): Ziel: ([^|]+)$')) { throw 'Das Journal ist nicht lesbar.' }
       if ($Matches[1] -ne [string]($planned.Count + 1) -or $allowed -notcontains $Matches[2] -or $planned -contains $Matches[2]) { throw 'Unerwarteter Eintrag im Journal.' }
       $planned += $Matches[2]
       $i++
@@ -1751,13 +1784,13 @@ try {
   $replacedLast = $true
     for (; $i -lt $lines.Count; $i++) {
       $line = $lines[$i]
-      if ($line -cmatch '^Ersetzt (\d+)$') {
+      if (Test-Rx $line '^Ersetzt (\d+)$') {
         if ($entries.Count -eq 0 -or $replacedLast -or $Matches[1] -ne $entries[$entries.Count - 1].N) { throw 'Das Journal ist nicht lesbar.' }
         $replacedLast = $true
         continue
       }
-      if ($withHash) { $ok = $line -cmatch '^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)(?: \| Sicherungsdatei: .+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: (.+)$' }
-      else { $ok = $line -cmatch '^Vorher (\d+): (Sicherung|Neu) \| Ziel: (.+?)()(?: \| Sicherungsdatei: .+?)? \| Hilfsdatei: (.+)$' }
+      if ($withHash) { $ok = Test-Rx $line '^Vorher (\d+): (Sicherung|Neu) \| Ziel: ([^|]+?)(?: \| Sicherungsdatei: [^|]+? \| SHA256: ([0-9A-F]{64}))? \| Hilfsdatei: ([^|]+)$' }
+      else { $ok = Test-Rx $line '^Vorher (\d+): (Sicherung|Neu) \| Ziel: ([^|]+?)()(?: \| Sicherungsdatei: [^|]+?)? \| Hilfsdatei: ([^|]+)$' }
       if (-not $ok) { throw 'Das Journal ist nicht lesbar.' }
       $e = @{ N = $Matches[1]; Kind = $Matches[2]; Dst = $Matches[3]; Hash = [string]$Matches[4]; Tmp = $Matches[5] }
       if ($e.N -ne [string]($entries.Count + 1) -or ($format2 -and $entries.Count -gt 0 -and -not $replacedLast) -or $allowed -notcontains $e.Dst) { throw 'Unerwarteter Eintrag im Journal.' }
@@ -1845,36 +1878,6 @@ function Read-Small([string]$p) {
     return [System.Text.Encoding]::ASCII.GetString($b, 0, $n).Trim()
   } catch { return $null }
 }
-# Ergebnis im Arbeitsordner je Versuch als Letztes atomar veroeffentlichen: erst .teil, dann umbenennen
-function Publish-WorkResult([string]$text) {
-  $final = Join-Path $Work ('Update-' + $AttemptId + '.log')
-  $tmp = $final + '.teil'
-  Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-  $text | Out-File -LiteralPath $tmp -Encoding utf8 -ErrorAction Stop
-  Move-Item -LiteralPath $tmp -Destination $final -Force -ErrorAction Stop
-}
-# Ergebnis dieses Versuchs selbst anzeigen (fuer wiederhergestellte Fassungen ohne Versuchskennung): hoechstens 16 KB
-# aus der eigenen Ergebnisdatei, ohne die gemeinsame Update.log anzufassen
-function Show-Result {
-  $text = $null
-  try {
-    $fs = [System.IO.File]::Open($Log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-    try {
-      $b = New-Object byte[] 16385
-      $n = 0
-      while ($n -lt 16385) { $k = $fs.Read($b, $n, 16385 - $n); if ($k -le 0) { break }; $n += $k }
-    } finally { $fs.Dispose() }
-    if ($n -le 16384) { $text = (New-Object System.Text.UTF8Encoding($false)).GetString($b, 0, $n).TrimStart([char]0xFEFF).Trim() }
-  } catch {}
-  if (-not $text) { $text = 'OFFEN Ergebnis des Updates unbekannt.' }
-  $icon = 'Warning'
-  if ($text -match '^OK ') { $icon = 'Information' }
-  $text = $text -replace '^(OK|FEHLER|ZURUECK|OFFEN) ', ''
-  try {
-    Add-Type -AssemblyName System.Windows.Forms
-    [void][System.Windows.Forms.MessageBox]::Show($text, 'RDP Pilot', 'OK', $icon)
-  } catch {}
-}
 # Neustart mit --nach-update und Versuchskennung. Nach einer Wiederherstellung ($LegacyFallback) kann die EXE aelter
 # als 1.56 sein und kennt keine Kennung: Dann normal starten und das Ergebnis dieses Versuchs hier anzeigen. Die
 # gemeinsame Update.log der aelteren Fassungen wird nicht mehr beschrieben (parallele Versuche ueberschreiben sich nicht).
@@ -1901,7 +1904,7 @@ while ((Get-Date) -lt $end) {
   if (Test-Path -LiteralPath $StartFile) {
     $s = [string](Read-Small $StartFile)
     Remove-Item -LiteralPath $StartFile -Force
-    if ($s.Trim() -match '^[0-9]{1,10}$') { $Installer = [int]$s.Trim() }
+    $t = $s.Trim(); if ($t.Length -ge 1 -and $t.Length -le 10 -and $t.Trim('0123456789'.ToCharArray()).Length -eq 0) { $Installer = [int]$t }
     break
   }
   if (-not (Test-OldInstance)) {
@@ -2001,7 +2004,7 @@ if ($text) { $text = $text.Trim() }
 # bleibt er erhalten und wird spaeter von der Bereinigung entfernt
 if ($Attempt -and $endConfirmed) { Remove-Item -LiteralPath $Attempt -Recurse -Force }
 # Neustart nur bei eindeutigem Abschluss: installiert (OK) oder nichts veraendert bzw. vollstaendig zurueckgesetzt (FEHLER)
-$clear = $text -and ($text -match '^(OK|FEHLER|ZURUECK) ') -and -not (Test-Path -LiteralPath (Join-Path $Work 'Wiederherstellung-offen'))
+$clear = $text -and ($text.StartsWith('OK ', [StringComparison]::Ordinal) -or $text.StartsWith('FEHLER ', [StringComparison]::Ordinal) -or $text.StartsWith('ZURUECK ', [StringComparison]::Ordinal)) -and -not (Test-Path -LiteralPath (Join-Path $Work 'Wiederherstellung-offen'))
 if (-not $clear) {
   if (-not $text) { $text = 'OFFEN Ergebnis des Updates unbekannt.'; if ($waitNote) { $text += ' ' + $waitNote } }
   ($text + ' RDP Pilot wurde nicht neu gestartet.') | Out-File -LiteralPath $Log -Encoding utf8

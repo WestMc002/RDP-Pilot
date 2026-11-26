@@ -99,6 +99,10 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.60  Update: Muster-Prüfungen von Journal, Manifest und Ordnernamen haben ein
+      Zeitlimit (250 ms); läuft es ab, gelten die Daten als nicht prüfbar und werden
+      abgelehnt. Die Muster für das Journal sind so geschrieben, dass ihre Laufzeit linear
+      bleibt.
 1.59  Update: Bricht ein Update von Version 1.54 unter „Programme“ ab, setzt RDP Pilot
       es nicht mehr mit Administratorrechten zurück (die Sicherungen dieser Version haben
       keine Prüfsumme), sondern bietet die Download-Seite zur Neuinstallation an.
