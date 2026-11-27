@@ -80,7 +80,11 @@ Fehlt sie oder passt sie nicht, zeigt das Info-Fenster "Nicht signiert." bzw.
 "Signatur ungültig." und es bleibt bei der Release-Seite.
 Übernommen werden nur "RDP Pilot.exe" und "Liesmich.txt", erst nach dem Beenden
 des Programms und jeweils in einem Schritt. Läuft RDP Pilot selbst gerade mit
-Administratorrechten, wird nicht aktualisiert: bitte normal starten. Schlägt ein
+Administratorrechten, startet es sich für das Update mit normalen Rechten neu und
+installiert dort. Gibt es auf dem System keine normalen Rechte (Benutzerkonten-
+steuerung aus oder eingebautes Konto "Administrator", z. B. auf Windows Server),
+wird mit Administratorrechten aktualisiert, aber nur über einen geschützten
+Arbeitsordner unter ProgramData. Schlägt ein
 Update fehl, läuft die bisherige Version weiter; Einzelheiten stehen im
 Fehlerprotokoll (%LOCALAPPDATA%\RDP Pilot\Fehler.log). Wurde ein Update
 unterbrochen (z. B. durch einen Absturz), stellt RDP Pilot beim nächsten
@@ -99,6 +103,12 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.61  Update: Läuft RDP Pilot mit Administratorrechten, startet es sich für das Update
+      mit normalen Rechten neu („--aktualisieren“) und installiert dort, statt nur auf
+      den normalen Start zu verweisen. Ohne normale Rechte (Benutzerkontensteuerung aus,
+      eingebautes Konto „Administrator“) aktualisiert es mit Administratorrechten über
+      den geschützten Arbeitsordner unter ProgramData; auch die Wiederherstellung ist
+      dann für solche Arbeitsordner möglich.
 1.60  Update: Muster-Prüfungen von Journal, Manifest und Ordnernamen haben ein
       Zeitlimit (250 ms); läuft es ab, gelten die Daten als nicht prüfbar und werden
       abgelehnt. Die Muster für das Journal sind so geschrieben, dass ihre Laufzeit linear

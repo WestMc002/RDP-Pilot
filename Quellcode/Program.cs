@@ -44,6 +44,12 @@ static class Program {
     args=args.Skip(1).ToArray();
    }
   }
+  // "--aktualisieren": Neustart mit normalen Rechten aus einer Instanz mit Administratorrechten, um das Update zu
+  // installieren (ohne weitere Rückfrage, nie ein weiterer Neustart)
+  if(args.Length>0&&args[0].Equals("--aktualisieren",StringComparison.OrdinalIgnoreCase)) {
+   MainForm.InstallNow=true;
+   args=args.Skip(1).ToArray();
+  }
   // Screenshots mit Beispieldaten (hell und dunkel) für GitHub, z. B. aus der Erstellen.bat
   if(args.Length>0&&args[0].Equals("--screenshots",StringComparison.OrdinalIgnoreCase)) {
    Ui.Init();

@@ -398,17 +398,121 @@ static class UpdateCheck {
 
  // Warum nicht installiert wird (null = kann installiert werden):
  // - im Projektordner (mit Erstellen.bat): dort entsteht die EXE beim Bauen
- // - RDP Pilot läuft selbst mit Administratorrechten: Skript und Neustart liefen dann erhöht mit Arbeitsordner
- //   im Temp-Ordner, sobald die Schreibprobe gelingt (normal gestartet nimmt das Update den geschützten Weg)
+ // - RDP Pilot läuft selbst mit Administratorrechten, obwohl es auf diesem System normale Rechte gibt: dann startet es
+ //   sich mit normalen Rechten neu ("--aktualisieren", RestartUnelevated) und installiert dort (ElevatedText). Ohne
+ //   normale Rechte (AlwaysElevated) wird mit Administratorrechten aktualisiert, aber immer über den geschützten
+ //   Arbeitsordner unter ProgramData.
  // - ein früheres Update wurde nicht abgeschlossen (PendingText): erst wiederherstellen (OfferRepair)
  public static string InstallBlocker() {
   if(InProjectFolder)
    return "Im Projektordner (mit Erstellen.bat) wird nicht automatisch aktualisiert – dort entsteht die EXE beim Erstellen.";
-  if(IsElevated)
-   return AppInfo.FullName+" läuft gerade mit Administratorrechten. Bitte "+AppInfo.FullName+" normal starten und dann aktualisieren.";
+  if(IsElevated&&!AlwaysElevated)return ElevatedText;
   if(PendingRestore()!=null)return PendingText;
   return null;
  }
+
+ public const string ElevatedText=AppInfo.FullName+" läuft gerade mit Administratorrechten. Bitte "+AppInfo.FullName+" normal starten und dann aktualisieren.";
+
+ // Steht dem Update nur im Weg, dass RDP Pilot mit Administratorrechten läuft (und es normale Rechte gibt)? Dann
+ // startet es sich mit normalen Rechten neu und installiert dort.
+ public static bool OnlyElevationBlocks(UpdateInfo r) {
+  if(r==null||r.Problem!=null||String.IsNullOrEmpty(r.ZipUrl)||String.IsNullOrEmpty(r.Sha256))return false;
+  return InstallBlocker()==ElevatedText;
+ }
+
+ // RDP Pilot mit normalen Rechten neu starten ("--aktualisieren"): mit dem Benutzerkonto der Windows-Oberfläche
+ // (Token des Explorers, CreateProcessWithTokenW), nicht mit den eigenen Administratorrechten. Läuft auch die
+ // Oberfläche erhöht, wird nichts gestartet (false). Der Aufrufer beendet sich danach; die neue Instanz installiert
+ // ohne weitere Rückfrage und startet sich nie erneut um.
+ public static bool RestartUnelevated() {
+  IntPtr token=IntPtr.Zero;
+  try {
+   token=ShellToken();
+   if(token==IntPtr.Zero)return false;
+   string exe=Application.ExecutablePath;
+   string cmd="\""+exe+"\" --aktualisieren";
+   var si=new StartupInfo();
+   si.cb=Marshal.SizeOf(typeof(StartupInfo));
+   ProcessInfo pi;
+   if(!CreateProcessWithTokenW(token,0,exe,cmd,0,IntPtr.Zero,Path.GetDirectoryName(exe),ref si,out pi)) {
+    Log.Write("Update","Neustart mit normalen Rechten nicht möglich (Fehler "+Marshal.GetLastWin32Error()+").");
+    return false;
+   }
+   CloseHandle(pi.hThread);
+   CloseHandle(pi.hProcess);
+   Log.Write("Update","Mit normalen Rechten neu gestartet, um das Update zu installieren.");
+   return true;
+  } catch(Exception ex) {Log.Write("Update",ex);return false;}
+  finally {if(token!=IntPtr.Zero)CloseHandle(token);}
+ }
+
+ // Primäres Token der Windows-Oberfläche (Explorer) mit normalen Rechten, sonst IntPtr.Zero (keine Oberfläche, kein
+ // Zugriff oder die Oberfläche läuft selbst erhöht). Der Aufrufer gibt es mit CloseHandle frei.
+ static IntPtr ShellToken() {
+  IntPtr proc=IntPtr.Zero,shellToken=IntPtr.Zero,token=IntPtr.Zero;
+  try {
+   IntPtr shell=GetShellWindow();
+   if(shell==IntPtr.Zero)return IntPtr.Zero;
+   uint shellPid;
+   GetWindowThreadProcessId(shell,out shellPid);
+   if(shellPid==0)return IntPtr.Zero;
+   proc=OpenProcess(0x1000,false,shellPid); // PROCESS_QUERY_LIMITED_INFORMATION
+   if(proc==IntPtr.Zero)return IntPtr.Zero;
+   if(!OpenProcessToken(proc,0x0002,out shellToken))return IntPtr.Zero; // TOKEN_DUPLICATE
+   // TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, Primary Token
+   if(!DuplicateTokenEx(shellToken,0x018B,IntPtr.Zero,2,1,out token)){token=IntPtr.Zero;return IntPtr.Zero;}
+   int elevation,len;
+   if(!GetTokenInformation(token,20,out elevation,4,out len)||elevation!=0)return IntPtr.Zero; // TokenElevation
+   IntPtr result=token;
+   token=IntPtr.Zero;
+   return result;
+  } catch {return IntPtr.Zero;}
+  finally {
+   if(token!=IntPtr.Zero)CloseHandle(token);
+   if(shellToken!=IntPtr.Zero)CloseHandle(shellToken);
+   if(proc!=IntPtr.Zero)CloseHandle(proc);
+  }
+ }
+
+ // Läuft RDP Pilot mit Administratorrechten auf einem System ohne normale Rechte (Benutzerkontensteuerung aus oder
+ // eingebautes Konto "Administrator", z. B. auf Windows Server)? Erkennung: Die Windows-Oberfläche liefert kein Token
+ // mit normalen Rechten (ohne Oberfläche ebenso). Dann Update und Wiederherstellung mit Administratorrechten, aber nur
+ // über den geschützten Arbeitsordner unter ProgramData.
+ public static bool AlwaysElevated {
+  get {
+   if(!IsElevated)return false;
+   IntPtr token=ShellToken();
+   if(token==IntPtr.Zero)return true;
+   CloseHandle(token);
+   return false;
+  }
+ }
+
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
+ struct StartupInfo {
+  public int cb;
+  public string lpReserved,lpDesktop,lpTitle;
+  public int dwX,dwY,dwXSize,dwYSize,dwXCountChars,dwYCountChars,dwFillAttribute,dwFlags;
+  public short wShowWindow,cbReserved2;
+  public IntPtr lpReserved2,hStdInput,hStdOutput,hStdError;
+ }
+ [StructLayout(LayoutKind.Sequential)]
+ struct ProcessInfo {
+  public IntPtr hProcess,hThread;
+  public int dwProcessId,dwThreadId;
+ }
+ [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd,out uint pid);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+ [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+ [DllImport("advapi32.dll",SetLastError=true)]
+ static extern bool DuplicateTokenEx(IntPtr existing,uint access,IntPtr attributes,int level,int type,out IntPtr token);
+ [DllImport("advapi32.dll",SetLastError=true)]
+ static extern bool GetTokenInformation(IntPtr token,int infoClass,out int info,int length,out int returned);
+ [DllImport("advapi32.dll",SetLastError=true,CharSet=CharSet.Unicode)]
+ static extern bool CreateProcessWithTokenW(IntPtr token,int logonFlags,string application,string commandLine,
+  int creationFlags,IntPtr environment,string currentDirectory,ref StartupInfo startup,out ProcessInfo info);
 
  // Läuft die EXE im Projektordner (Erstellen.bat daneben)?
  static bool InProjectFolder {get {return File.Exists(Path.Combine(Application.StartupPath,"Erstellen.bat"));}}
@@ -516,7 +620,9 @@ static class UpdateCheck {
   }
   string logFile=LogFor(attemptId);
   string exe=Application.ExecutablePath;
-  bool elevated=!CanWrite(Path.GetDirectoryName(exe));
+  // Ohne normale Rechte (AlwaysElevated) läuft RDP Pilot schon erhöht: dann immer der geschützte Weg, auch wenn die
+  // Schreibprobe gelingt (sonst liefe das Skript erhöht mit Arbeitsordner im Temp-Ordner)
+  bool elevated=IsElevated||!CanWrite(Path.GetDirectoryName(exe));
   // Erhöht: eigener, nicht vorhersagbarer Arbeitsordner direkt unter ProgramData, den das Skript nur für
   // Administratoren beschreibbar anlegt. Sonst reicht der Arbeitsordner im Temp-Ordner des Benutzers.
   string work=elevated
@@ -590,7 +696,8 @@ static class UpdateCheck {
    }
    Thread.Sleep(100);
   }
-  start.Verb="runas";
+  // schon erhöht (nur ohne normale Rechte, AlwaysElevated): ohne erneute Abfrage starten
+  if(!IsElevated)start.Verb="runas";
   Process elevatedProcess;
   try {elevatedProcess=Process.Start(start);}
   catch(System.ComponentModel.Win32Exception ex) {
@@ -893,10 +1000,10 @@ static class UpdateCheck {
  public static bool OfferRepair(IWin32Window owner) {
   // im Projektordner (Erstellen.bat neben der EXE) wird nie etwas zurückgesetzt, wie beim Update
   if(InProjectFolder)return false;
-  // nie aus einer Instanz mit Administratorrechten (sonst liefe die Reparatur mit geerbten Rechten)
-  if(IsElevated) {
-   MessageBox.Show(owner,AppInfo.FullName+" läuft gerade mit Administratorrechten. Bitte "+AppInfo.FullName+" normal starten und dann aktualisieren.",
-    AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Information);
+  // nie aus einer Instanz mit Administratorrechten (sonst liefe die Reparatur mit geerbten Rechten) – außer auf
+  // Systemen ohne normale Rechte; dort nur geschützte Arbeitsordner unter ProgramData (Repair prüft das)
+  if(IsElevated&&!AlwaysElevated) {
+   MessageBox.Show(owner,ElevatedText,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Information);
    return false;
   }
   // erst unter der Sperre aufräumen, was nichts verändert hat; ist sie belegt, läuft gerade ein Update
@@ -925,8 +1032,11 @@ static class UpdateCheck {
 
  static void Repair(string dir) {
   if(InProjectFolder)throw new Exception("Im Projektordner wird nichts zurückgesetzt.");
-  if(IsElevated)throw new Exception(AppInfo.FullName+" läuft gerade mit Administratorrechten.");
   bool protectedDir=IsProtectedDir(dir);
+  if(IsElevated&&!(AlwaysElevated&&protectedDir))
+   throw new Exception(AlwaysElevated
+    ?"Die vorherige Version lässt sich nicht automatisch wiederherstellen. Bitte "+AppInfo.FullName+" neu herunterladen."
+    :AppInfo.FullName+" läuft gerade mit Administratorrechten.");
   if(protectedDir&&LegacyWithoutHash(dir))throw new Exception(ReinstallText);
   string exe=Application.ExecutablePath;
   bool writable=CanWrite(Path.GetDirectoryName(exe));

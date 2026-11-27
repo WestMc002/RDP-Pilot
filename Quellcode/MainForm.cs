@@ -77,6 +77,9 @@ public class MainForm:Form {
  string installFailure;      // automatisches Aktualisieren gescheitert: Originaltext für "Details" (null = nein)
  // Neustart durch das Update-Skript (--nach-update): Ergebnis melden
  public static bool AfterUpdate;
+ // "--aktualisieren": RDP Pilot lief mit Administratorrechten und hat sich für das Update mit normalen Rechten neu
+ // gestartet – gleich prüfen und ohne weitere Rückfrage installieren (Fehler werden gemeldet, nie ein weiterer Neustart)
+ public static bool InstallNow;
  public static string UpdateAttempt; // Versuchskennung aus --nach-update (ab 1.56), sonst null
  ModernSelect select=new ModernSelect();
  MonitorMap map=new MonitorMap();
@@ -500,6 +503,13 @@ public class MainForm:Form {
   }
   // bei jedem Start still prüfen, etwa 15 s nach dem Start, ohne 20-Stunden-Sperre
   autoUpdateRetry.Tick+=(s,a)=>{autoUpdateRetry.Stop();TryAutoUpdate();};
+  if(InstallNow) {
+   BeginInvoke(new Action(async ()=>{
+    await CheckForUpdates(true);
+    if(update!=null)await InstallUpdate(true,true);
+   }));
+   return;
+  }
   var timer=new System.Windows.Forms.Timer{Interval=15000};
   timer.Tick+=async (s,a)=>{
    timer.Stop();
@@ -559,7 +569,8 @@ public class MainForm:Form {
     update=release;
     ShowUpdateBar(true);
     // "Automatisch aktualisieren": ohne Rückfrage installieren, sobald nichts mehr läuft (nicht bei "Jetzt prüfen")
-    if(!manual&&UpdateSettings.AutoInstall&&UpdateCheck.InstallBlocker()==null&&!String.IsNullOrEmpty(release.ZipUrl))
+    if(!manual&&UpdateSettings.AutoInstall&&!String.IsNullOrEmpty(release.ZipUrl)&&
+     (UpdateCheck.InstallBlocker()==null||(!InstallNow&&UpdateCheck.OnlyElevationBlocks(release))))
      BeginInvoke(new Action(TryAutoUpdate));
    } else {
     update=null;
@@ -584,8 +595,16 @@ public class MainForm:Form {
  // "Automatisch aktualisieren": installieren, wenn nichts läuft – sonst alle 5 Minuten erneut versuchen
  void TryAutoUpdate() {
   if(IsDisposed||update==null||installing||Demo.Active||!UpdateSettings.AutoInstall||!UpdateSettings.Auto)return;
-  if(UpdateCheck.InstallBlocker()!=null||String.IsNullOrEmpty(update.ZipUrl)||UpdateCheck.Busy)return;
+  // läuft RDP Pilot mit Administratorrechten: mit normalen Rechten neu starten und dort installieren
+  // (nie nach "--aktualisieren", damit sich nichts im Kreis startet)
+  bool restart=!InstallNow&&UpdateCheck.OnlyElevationBlocks(update);
+  if(!restart&&(UpdateCheck.InstallBlocker()!=null||String.IsNullOrEmpty(update.ZipUrl)))return;
+  if(UpdateCheck.Busy)return;
   if(BusyForUpdate()){autoUpdateRetry.Stop();autoUpdateRetry.Start();return;}
+  if(restart) {
+   if(UpdateCheck.RestartUnelevated()){installing=true;Close();}
+   return;
+  }
   var t=InstallUpdate(true);
  }
 
@@ -599,6 +618,7 @@ public class MainForm:Form {
    // nicht abgeschlossenes Update: Der Knopf bietet die Wiederherstellung an
    updateBar.Install.Enabled=CanStartInstall(blocker)&&!String.IsNullOrEmpty(update.ZipUrl);
    if(blocker==UpdateCheck.PendingText)blocker+=" „Jetzt aktualisieren“ stellt zuerst die vorherige Version wieder her.";
+   if(blocker==UpdateCheck.ElevatedText&&!InstallNow)blocker=AppInfo.FullName+" läuft gerade mit Administratorrechten. „Jetzt aktualisieren“ startet es mit normalen Rechten neu und installiert dann.";
    tips.SetToolTip(updateBar.Install,blocker??(update.Problem!=null?"Wird nicht installiert: "+update.Problem+"\n"+update.ProblemDetail:
     String.IsNullOrEmpty(update.ZipUrl)?"Im Release ist keine passende ZIP-Datei.":
     "ZIP herunterladen, Programm beenden, EXE und Liesmich ersetzen und neu starten.\nDie Verbindungen (.rdp-Dateien) bleiben unverändert."));
@@ -618,16 +638,19 @@ public class MainForm:Form {
   }
  }
 
- // Installieren möglich: kein Hindernis oder nur ein nicht abgeschlossenes Update (dann zuerst Wiederherstellung)
- static bool CanStartInstall(string blocker){return blocker==null||blocker==UpdateCheck.PendingText;}
+ // Installieren möglich: kein Hindernis, nur ein nicht abgeschlossenes Update (dann zuerst Wiederherstellung) oder nur
+ // die Administratorrechte (dann Neustart mit normalen Rechten, im Zweifel Rückfall auf die Meldung)
+ static bool CanStartInstall(string blocker){return blocker==null||blocker==UpdateCheck.PendingText||(!InstallNow&&blocker==UpdateCheck.ElevatedText);}
 
  void OpenReleasePage() {
   UpdateCheck.OpenPage(update!=null?update.Url:null);
  }
 
- Task InstallUpdate(){return InstallUpdate(false);}
+ Task InstallUpdate(){return InstallUpdate(false,false);}
+ Task InstallUpdate(bool automatic){return InstallUpdate(automatic,false);}
 
- async Task InstallUpdate(bool automatic) {
+ // report: Fehler auch ohne Rückfrage melden (nach "--aktualisieren" hat der Benutzer das Update ausdrücklich gewollt)
+ async Task InstallUpdate(bool automatic,bool report) {
   if(update==null||installing)return;
   var info=update;
   // nur ein Update zur Zeit, auch über mehrere RDP-Pilot-Fenster und Konten hinweg
@@ -637,13 +660,25 @@ public class MainForm:Form {
   }
   // nicht abgeschlossenes Update: erst die vorherige Version wiederherstellen (nur von Hand, mit Rückfrage)
   if(UpdateCheck.InstallBlocker()==UpdateCheck.PendingText) {
-   if(automatic)return;
+   if(automatic&&!report)return;
    // zuerst still aufräumen, was nichts verändert hat (unter der Sperre des Installationsziels)
    UpdateCheck.Cleanup();
    if(UpdateCheck.InstallBlocker()==UpdateCheck.PendingText) {
     if(UpdateCheck.OfferRepair(this)){installing=true;Close();}
     return;
    }
+  }
+  // mit Administratorrechten (und normale Rechte vorhanden): mit normalen Rechten neu starten und dort installieren
+  if(!automatic&&!InstallNow&&UpdateCheck.InstallBlocker()==UpdateCheck.ElevatedText) {
+   if(UpdateCheck.OnlyElevationBlocks(info)) {
+    if(MessageBox.Show(this,AppInfo.FullName+" läuft gerade mit Administratorrechten. Für das Update startet "+AppInfo.FullName+
+     " mit normalen Rechten neu und installiert dann Version "+info.Version+".\r\nEinstellungen und Verbindungen bleiben erhalten.\r\n\r\nJetzt aktualisieren?",
+     AppInfo.FullName,MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return;
+    if(UpdateCheck.RestartUnelevated()){installing=true;Close();return;}
+   }
+   // Neustart nicht möglich: wie bisher auf den normalen Start verweisen
+   MessageBox.Show(this,UpdateCheck.ElevatedText,AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Information);
+   return;
   }
   if(!automatic) {
    string text=AppInfo.FullName+" wird beendet, auf Version "+info.Version+" aktualisiert und neu gestartet.\r\n"+
@@ -662,7 +697,10 @@ public class MainForm:Form {
    // automatisch: keine Meldung – die Hinweisleiste bleibt, die Kurzmeldung mit "Details" steht im Info-Fenster
    Log.Write(automatic?"Update automatisch installieren":"Update installieren",ex);
    if(automatic)installFailure=(ex.Data["Detail"] as string)??ex.Message;
-   else {
+   if(automatic&&report)
+    MessageBox.Show(this,"Update nicht installiert – "+AppInfo.FullName+" läuft in der bisherigen Version weiter.\n\n"+ex.Message,
+     AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Warning);
+   else if(!automatic) {
     string detail=ex.Data.Contains("Detail")?ex.Data["Detail"] as string:null;
     MessageBox.Show(this,"Das Update ist fehlgeschlagen: "+ex.Message+(String.IsNullOrEmpty(detail)?"":"\n\n"+detail),AppInfo.FullName,MessageBoxButtons.OK,MessageBoxIcon.Warning);
    }
