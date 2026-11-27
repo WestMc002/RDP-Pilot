@@ -103,6 +103,11 @@ Gespeichert wird das unter %LOCALAPPDATA%\RDP Pilot\Einstellungen.ini.
 Ohne Internet bleibt alles wie gewohnt, es erscheint keine Fehlermeldung.
 
 Versionen
+1.62  Update: Mit Administratorrechten wird nur dann ohne Neustart aktualisiert, wenn
+      eindeutig feststeht, dass die Windows-Oberfläche selbst erhöht läuft; lässt sich das
+      nicht feststellen, wird nicht aktualisiert (Hinweis: normal starten). Das stille
+      Aufräumen im Temp-Ordner läuft nur noch mit normalen Rechten und überspringt
+      umgeleitete Ordner.
 1.61  Update: Läuft RDP Pilot mit Administratorrechten, startet es sich für das Update
       mit normalen Rechten neu („--aktualisieren“) und installiert dort, statt nur auf
       den normalen Start zu verweisen. Ohne normale Rechte (Benutzerkontensteuerung aus,

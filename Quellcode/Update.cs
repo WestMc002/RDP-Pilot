@@ -406,11 +406,17 @@ static class UpdateCheck {
  public static string InstallBlocker() {
   if(InProjectFolder)
    return "Im Projektordner (mit Erstellen.bat) wird nicht automatisch aktualisiert – dort entsteht die EXE beim Erstellen.";
-  if(IsElevated&&!AlwaysElevated)return ElevatedText;
+  if(IsElevated) {
+   ShellRights rights=ShellRightsNow();
+   if(rights==ShellRights.Normal)return ElevatedText;      // mit normalen Rechten neu starten
+   if(rights==ShellRights.Unknown)return UnclearText;     // ungeklärt: nicht erhöht installieren
+  }
   if(PendingRestore()!=null)return PendingText;
   return null;
  }
 
+ public const string UnclearText=AppInfo.FullName+" läuft gerade mit Administratorrechten, und es lässt sich nicht sicher feststellen, "+
+  "ob dieses Konto auch normale Rechte hat. Bitte "+AppInfo.FullName+" normal starten und dann aktualisieren.";
  public const string ElevatedText=AppInfo.FullName+" läuft gerade mit Administratorrechten. Bitte "+AppInfo.FullName+" normal starten und dann aktualisieren.";
 
  // Steht dem Update nur im Weg, dass RDP Pilot mit Administratorrechten läuft (und es normale Rechte gibt)? Dann
@@ -427,8 +433,7 @@ static class UpdateCheck {
  public static bool RestartUnelevated() {
   IntPtr token=IntPtr.Zero;
   try {
-   token=ShellToken();
-   if(token==IntPtr.Zero)return false;
+   if(ShellToken(out token)!=ShellRights.Normal)return false;
    string exe=Application.ExecutablePath;
    string cmd="\""+exe+"\" --aktualisieren";
    var si=new StartupInfo();
@@ -446,27 +451,42 @@ static class UpdateCheck {
   finally {if(token!=IntPtr.Zero)CloseHandle(token);}
  }
 
- // Primäres Token der Windows-Oberfläche (Explorer) mit normalen Rechten, sonst IntPtr.Zero (keine Oberfläche, kein
- // Zugriff oder die Oberfläche läuft selbst erhöht). Der Aufrufer gibt es mit CloseHandle frei.
- static IntPtr ShellToken() {
+ // Rechte der Windows-Oberfläche (Explorer): Normal = sie läuft mit normalen Rechten (es gibt sie also für dieses
+ // Konto), Elevated = sie läuft eindeutig selbst erhöht (Benutzerkontensteuerung aus oder eingebautes Konto
+ // "Administrator"), Unknown = nicht feststellbar (keine Oberfläche, kein Zugriff, Abfragefehler). Nur Elevated gibt
+ // das Update mit Administratorrechten frei; Unknown sperrt es (fail-closed).
+ enum ShellRights {Normal,Elevated,Unknown}
+
+ static ShellRights ShellRightsNow() {
+  IntPtr token;
+  ShellRights rights=ShellToken(out token);
+  if(token!=IntPtr.Zero)CloseHandle(token);
+  return rights;
+ }
+
+ // token: bei Normal ein primäres Token mit normalen Rechten (der Aufrufer gibt es mit CloseHandle frei), sonst Zero
+ static ShellRights ShellToken(out IntPtr primary) {
+  primary=IntPtr.Zero;
   IntPtr proc=IntPtr.Zero,shellToken=IntPtr.Zero,token=IntPtr.Zero;
   try {
    IntPtr shell=GetShellWindow();
-   if(shell==IntPtr.Zero)return IntPtr.Zero;
+   if(shell==IntPtr.Zero)return ShellRights.Unknown;
    uint shellPid;
    GetWindowThreadProcessId(shell,out shellPid);
-   if(shellPid==0)return IntPtr.Zero;
+   if(shellPid==0)return ShellRights.Unknown;
    proc=OpenProcess(0x1000,false,shellPid); // PROCESS_QUERY_LIMITED_INFORMATION
-   if(proc==IntPtr.Zero)return IntPtr.Zero;
-   if(!OpenProcessToken(proc,0x0002,out shellToken))return IntPtr.Zero; // TOKEN_DUPLICATE
-   // TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, Primary Token
-   if(!DuplicateTokenEx(shellToken,0x018B,IntPtr.Zero,2,1,out token)){token=IntPtr.Zero;return IntPtr.Zero;}
+   if(proc==IntPtr.Zero)return ShellRights.Unknown;
+   if(!OpenProcessToken(proc,0x000A,out shellToken)){shellToken=IntPtr.Zero;return ShellRights.Unknown;} // TOKEN_QUERY | TOKEN_DUPLICATE
    int elevation,len;
-   if(!GetTokenInformation(token,20,out elevation,4,out len)||elevation!=0)return IntPtr.Zero; // TokenElevation
-   IntPtr result=token;
+   if(!GetTokenInformation(shellToken,20,out elevation,4,out len))return ShellRights.Unknown; // TokenElevation
+   if(elevation!=0)return ShellRights.Elevated;
+   // TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, Primary Token
+   if(!DuplicateTokenEx(shellToken,0x018B,IntPtr.Zero,2,1,out token)){token=IntPtr.Zero;return ShellRights.Unknown;}
+   if(!GetTokenInformation(token,20,out elevation,4,out len)||elevation!=0)return ShellRights.Unknown;
+   primary=token;
    token=IntPtr.Zero;
-   return result;
-  } catch {return IntPtr.Zero;}
+   return ShellRights.Normal;
+  } catch {return ShellRights.Unknown;}
   finally {
    if(token!=IntPtr.Zero)CloseHandle(token);
    if(shellToken!=IntPtr.Zero)CloseHandle(shellToken);
@@ -474,18 +494,12 @@ static class UpdateCheck {
   }
  }
 
- // Läuft RDP Pilot mit Administratorrechten auf einem System ohne normale Rechte (Benutzerkontensteuerung aus oder
- // eingebautes Konto "Administrator", z. B. auf Windows Server)? Erkennung: Die Windows-Oberfläche liefert kein Token
- // mit normalen Rechten (ohne Oberfläche ebenso). Dann Update und Wiederherstellung mit Administratorrechten, aber nur
- // über den geschützten Arbeitsordner unter ProgramData.
+ // Läuft RDP Pilot mit Administratorrechten auf einem System ohne normale Rechte? Nur wenn die Windows-Oberfläche
+ // eindeutig selbst erhöht läuft; ein Abfragefehler zählt nicht (dann bleibt das Update gesperrt, UnclearText).
+ // Dann Update und Wiederherstellung mit Administratorrechten, aber nur über den geschützten Arbeitsordner unter
+ // ProgramData.
  public static bool AlwaysElevated {
-  get {
-   if(!IsElevated)return false;
-   IntPtr token=ShellToken();
-   if(token==IntPtr.Zero)return true;
-   CloseHandle(token);
-   return false;
-  }
+  get {return IsElevated&&ShellRightsNow()==ShellRights.Elevated;}
  }
 
  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
@@ -696,7 +710,11 @@ static class UpdateCheck {
    }
    Thread.Sleep(100);
   }
-  // schon erhöht (nur ohne normale Rechte, AlwaysElevated): ohne erneute Abfrage starten
+  // schon erhöht: nur ohne normale Rechte (AlwaysElevated, eindeutig festgestellt) ohne erneute Abfrage starten
+  if(IsElevated&&!AlwaysElevated) {
+   WriteStartFile(startFile,"ABBRUCH");
+   throw new Exception(UnclearText);
+  }
   if(!IsElevated)start.Verb="runas";
   Process elevatedProcess;
   try {elevatedProcess=Process.Start(start);}
@@ -825,10 +843,16 @@ static class UpdateCheck {
   try {WithTargetLock(CleanupLocked);} catch {}
  }
 
+ // Aufräumen im Temp-Ordner des Benutzers nur mit normalen Rechten: Mit Administratorrechten könnte eine umgeleitete
+ // Pfadkomponente das rekursive Löschen auf fremde Ordner lenken. Ordner mit Umleitung (Reparse Point irgendwo im
+ // Pfad) oder im Netzwerk werden auch so nicht angefasst.
  static void CleanupLocked() {
-  if(Directory.Exists(Folder)) {
+  if(IsElevated)return;
+  bool missing;
+  if(Directory.Exists(Folder)&&RdpFile.SafeToTouch(Folder,out missing)&&!missing) {
    foreach(string dir in PendingDirs()) {
     if(!dir.StartsWith(Folder+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))continue;
+    if(!RdpFile.SafeToTouch(dir,out missing)||missing)continue;
     if(!NothingToRestore(dir))continue;
     try {
      Directory.Delete(dir,true);
